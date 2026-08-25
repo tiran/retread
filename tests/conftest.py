@@ -95,6 +95,8 @@ def identical_result() -> WheelComparison:
     return WheelComparison(
         upstream="up",
         downstream="down",
+        upstream_wheel="foo-1.0-py3-none-any.whl",
+        downstream_wheel="foo-1.0-py3-none-any.whl",
         only_upstream=(),
         only_downstream=(),
         different=(),
@@ -108,6 +110,8 @@ def error_result() -> WheelComparison:
     return WheelComparison(
         upstream="up",
         downstream="down",
+        upstream_wheel="foo-1.0-py3-none-any.whl",
+        downstream_wheel="foo-1.0-py3-none-any.whl",
         only_upstream=(FileEntry("missing.py", Severity.ERROR, Classification.OTHER),),
         only_downstream=(
             FileEntry(
@@ -137,6 +141,8 @@ def notice_only_result() -> WheelComparison:
     return WheelComparison(
         upstream="up",
         downstream="down",
+        upstream_wheel="foo-1.0-py3-none-any.whl",
+        downstream_wheel="foo-1.0-py3-none-any.whl",
         only_upstream=(FileEntry("foo.libs/bar.so", Severity.NOTICE, Classification.AUDITWHEEL),),
         only_downstream=(),
         different=(

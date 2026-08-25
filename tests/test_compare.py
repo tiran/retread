@@ -365,6 +365,8 @@ def _metadata_diff_result():
     return WheelComparison(
         upstream="up",
         downstream="down",
+        upstream_wheel="foo-1.0-py3-none-any.whl",
+        downstream_wheel="foo-1.0-py3-none-any.whl",
         only_upstream=(),
         only_downstream=(),
         different=(diff,),
@@ -408,6 +410,8 @@ def test_check_metadata_no_metadata_diffs() -> None:
     result = WheelComparison(
         upstream="up",
         downstream="down",
+        upstream_wheel="foo-1.0-py3-none-any.whl",
+        downstream_wheel="foo-1.0-py3-none-any.whl",
         only_upstream=(),
         only_downstream=(),
         different=(diff,),

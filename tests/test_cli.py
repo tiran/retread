@@ -98,6 +98,8 @@ def test_print_comparison_size_info(
     result = WheelComparison(
         upstream="up",
         downstream="down",
+        upstream_wheel="foo-1.0-py3-none-any.whl",
+        downstream_wheel="foo-1.0-py3-none-any.whl",
         only_upstream=(),
         only_downstream=(),
         different=(
@@ -122,6 +124,8 @@ def test_print_comparison_downstream_only(capsys) -> None:
     result = WheelComparison(
         upstream="up",
         downstream="down",
+        upstream_wheel="foo-1.0-py3-none-any.whl",
+        downstream_wheel="foo-1.0-py3-none-any.whl",
         only_upstream=(),
         only_downstream=(FileEntry("extra.py", Severity.ERROR, Classification.OTHER),),
         different=(),

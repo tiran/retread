@@ -25,6 +25,8 @@ def _format_label(classification: Classification) -> str:
 
 def _print_comparison(result: WheelComparison) -> None:
     """Print a wheel comparison result grouped by severity."""
+    print(f"Upstream:   {result.upstream_wheel}")
+    print(f"Downstream: {result.downstream_wheel}")
     if result.is_identical:
         print("Wheels are identical.")
         print(f"  {len(result.identical)} files match")
@@ -103,6 +105,8 @@ def _print_json(result: WheelComparison) -> None:
     data: dict[str, object] = {
         "upstream": result.upstream,
         "downstream": result.downstream,
+        "upstream_wheel": result.upstream_wheel,
+        "downstream_wheel": result.downstream_wheel,
         "is_identical": result.is_identical,
         "has_errors": result.has_errors,
         "only_upstream": [_entry_to_dict(e, "upstream") for e in result.only_upstream],

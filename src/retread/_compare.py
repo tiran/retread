@@ -167,6 +167,8 @@ class WheelComparison:
     Attributes:
         upstream: Identifier (URL or path) of the upstream wheel.
         downstream: Identifier (URL or path) of the downstream rebuild.
+        upstream_wheel: Wheel filename of the upstream wheel.
+        downstream_wheel: Wheel filename of the downstream rebuild.
         only_upstream: Files present only in the upstream wheel.
         only_downstream: Files present only in the downstream rebuild.
         different: Files present in both but with different content.
@@ -175,6 +177,8 @@ class WheelComparison:
 
     upstream: str
     downstream: str
+    upstream_wheel: str
+    downstream_wheel: str
     only_upstream: tuple[FileEntry, ...]
     only_downstream: tuple[FileEntry, ...]
     different: tuple[FileDiff, ...]
@@ -262,7 +266,9 @@ def _compare(
     upstream_infos: dict[str, Any],
     downstream_infos: dict[str, Any],
 ) -> WheelComparison:
-    dist, dist_version = _parse_name_version(_wheel_basename(upstream))
+    upstream_whl = _wheel_basename(upstream)
+    downstream_whl = _wheel_basename(downstream)
+    dist, dist_version = _parse_name_version(upstream_whl)
     upstream_names = set(upstream_infos)
     downstream_names = set(downstream_infos)
 
@@ -299,6 +305,8 @@ def _compare(
     return WheelComparison(
         upstream=upstream,
         downstream=downstream,
+        upstream_wheel=upstream_whl,
+        downstream_wheel=downstream_whl,
         only_upstream=tuple(_make_entry(fname) for fname in only_upstream),
         only_downstream=tuple(_make_entry(fname) for fname in only_downstream),
         different=tuple(different),
