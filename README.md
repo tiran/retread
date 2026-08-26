@@ -1,8 +1,11 @@
 # retread
 
+A retread (/ˈriːtrɛd/) is a used tire whose tread has been replaced --
+**retread** checks the quality of rebuilt Python wheels.
+
 **retread** inspects and compares Python wheels. Given a downstream
 rebuild, it resolves the corresponding upstream wheel and reports which
-files differ, are missing, or were added — without downloading entire
+files differ, are missing, or were added -- without downloading entire
 wheel files.
 
 It uses [zipwire](https://github.com/tiran/zipwire) for efficient
