@@ -59,6 +59,10 @@ def sync_retread(
     Returns:
         A :class:`WheelComparison` result.
     """
+    # SyncRemoteZip (not SyncRemoteWheel) -- retread compares all files
+    # via infolist(), not just dist-info. The adaptive tail fetch in
+    # RemoteWheel would download more data upfront for no benefit when
+    # wheels are identical (the common case).
     from zipwire import SyncRemoteZip
 
     from retread.backends import RequestsBackend
@@ -82,7 +86,7 @@ def sync_retread(
 
         # Determine downstream source type
         if downstream_index is not None:
-            # Filename → resolve from downstream index
+            # Filename -> resolve from downstream index
             ds_pypi = backend.pypi_client(endpoint=downstream_index)
             ds_page = ds_pypi.get_project_page(str(spec.name))
             ds_pkg = find_matching_wheel(ds_page, spec, index=downstream_index)
@@ -130,6 +134,7 @@ async def async_retread(
     Returns:
         A :class:`WheelComparison` result.
     """
+    # See comment in sync_retread for why RemoteZip, not RemoteWheel.
     from zipwire import AsyncRemoteZip
 
     from retread.backends import AiohttpBackend
@@ -160,7 +165,7 @@ async def async_retread(
 
         # Determine downstream source type
         if downstream_index is not None:
-            # Filename → resolve from downstream index
+            # Filename -> resolve from downstream index
             ds_pkg = find_matching_wheel(ds_page, spec, index=downstream_index)
             downstream_source = ds_pkg.url
             is_local = False

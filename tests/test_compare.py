@@ -129,6 +129,7 @@ def test_parse_name_version_invalid() -> None:
 _DIST = "foo"
 _VER = "1.0"
 
+EXPECTED = Severity.EXPECTED
 NOTICE = Severity.NOTICE
 ERROR = Severity.ERROR
 
@@ -136,10 +137,10 @@ ERROR = Severity.ERROR
 @pytest.mark.parametrize(
     ("filename", "missing", "expected_severity", "expected_classification"),
     [
-        # dist-info files (always NOTICE regardless of missing)
-        ("foo-1.0.dist-info/RECORD", False, NOTICE, Classification.RECORD),
-        ("foo-1.0.dist-info/RECORD", True, NOTICE, Classification.RECORD),
-        ("foo-1.0.dist-info/WHEEL", False, NOTICE, Classification.WHEEL),
+        # dist-info files
+        ("foo-1.0.dist-info/RECORD", False, EXPECTED, Classification.RECORD),
+        ("foo-1.0.dist-info/RECORD", True, EXPECTED, Classification.RECORD),
+        ("foo-1.0.dist-info/WHEEL", False, EXPECTED, Classification.WHEEL),
         ("foo-1.0.dist-info/METADATA", False, NOTICE, Classification.METADATA),
         (
             "foo-1.0.dist-info/sboms/auditwheel.cdx.json",
@@ -150,7 +151,7 @@ ERROR = Severity.ERROR
         ("foo-1.0.dist-info/licenses/LICENSE", False, NOTICE, Classification.LICENSE),
         ("foo-1.0.dist-info/top_level.txt", False, NOTICE, Classification.DIST_INFO),
         # data directory
-        ("foo-1.0.data/scripts/mybin", False, NOTICE, Classification.DATA_SCRIPTS),
+        ("foo-1.0.data/scripts/mybin", False, EXPECTED, Classification.DATA_SCRIPTS),
         ("foo-1.0.data/scripts/mybin", True, ERROR, Classification.DATA_SCRIPTS),
         ("foo-1.0.data/headers/foo.h", False, NOTICE, Classification.DATA),
         ("foo-1.0.data/data/resource.dat", True, ERROR, Classification.DATA),
@@ -161,7 +162,7 @@ ERROR = Severity.ERROR
         (
             "foo/_bar.cpython-312-x86_64-linux-gnu.so",
             False,
-            NOTICE,
+            EXPECTED,
             Classification.EXTENSION_MODULE,
         ),
         (
@@ -299,8 +300,8 @@ def test_compare_only_downstream() -> None:
     assert result.only_downstream[0].filename == "foo/new.py"
 
 
-def test_compare_dist_info_is_notice() -> None:
-    """dist-info file differences should be classified as notices."""
+def test_compare_dist_info_record_is_expected() -> None:
+    """dist-info RECORD differences should be classified as expected."""
     fname = "foo-1.0.dist-info/RECORD"
     up = {fname: FakeInfo(fname, crc=111, file_size=500)}
     down = {fname: FakeInfo(fname, crc=222, file_size=600)}
@@ -310,7 +311,7 @@ def test_compare_dist_info_is_notice() -> None:
         upstream_infos=up,
         downstream_infos=down,
     )
-    assert result.different[0].severity is Severity.NOTICE
+    assert result.different[0].severity is Severity.EXPECTED
     assert result.different[0].classification is Classification.RECORD
 
 
@@ -404,7 +405,7 @@ def test_check_metadata_no_metadata_diffs() -> None:
         200,
         111,
         222,
-        Severity.NOTICE,
+        Severity.EXPECTED,
         Classification.RECORD,
     )
     result = WheelComparison(

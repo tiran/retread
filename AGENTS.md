@@ -35,6 +35,8 @@ package indexes.
 
 - **Always** sign off commits with `git commit -s`.
   Every commit message must include a `Signed-off-by:` line.
+- Keep commit messages high-level. Focus on user-visible and API impact,
+  not internal implementation details.
 
 ## Commands
 

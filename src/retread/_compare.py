@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 
 class Severity(enum.Enum):
+    EXPECTED = "expected"
     NOTICE = "notice"
     ERROR = "error"
 
@@ -89,10 +90,11 @@ def _parse_name_version(wheel_filename: str) -> tuple[str, str]:
 def _classify_file(
     filename: str, *, dist: str, version: str, missing: bool = False
 ) -> tuple[Severity, Classification]:
-    """Classify a file difference as NOTICE or ERROR with a classification label.
+    """Classify a file difference with a severity and classification label.
 
-    Expected differences (dist-info metadata, SBOMs, shared libraries)
-    are notices; everything else is an error.
+    Always-expected differences (RECORD, WHEEL, shared libraries, data
+    scripts) are EXPECTED; other known dist-info differences are NOTICE;
+    everything else is an ERROR.
 
     When *missing* is True the file is only present on one side of the
     comparison.  A shared library that is absent is an error unless it
@@ -109,9 +111,9 @@ def _classify_file(
     if filename.startswith(dist_info):
         rest = filename[len(dist_info) :]
         if rest == "RECORD":
-            return Severity.NOTICE, Classification.RECORD
+            return Severity.EXPECTED, Classification.RECORD
         if rest == "WHEEL":
-            return Severity.NOTICE, Classification.WHEEL
+            return Severity.EXPECTED, Classification.WHEEL
         if rest == "METADATA":
             return Severity.NOTICE, Classification.METADATA
         if rest.startswith("sboms/"):
@@ -122,10 +124,13 @@ def _classify_file(
     # {name}-{version}.data/{subdir}/
     if filename.startswith(data):
         rest = filename[len(data) :]
-        cls = Classification.DATA_SCRIPTS if rest.startswith("scripts/") else Classification.DATA
+        if rest.startswith("scripts/"):
+            if missing:
+                return Severity.ERROR, Classification.DATA_SCRIPTS
+            return Severity.EXPECTED, Classification.DATA_SCRIPTS
         if missing:
-            return Severity.ERROR, cls
-        return Severity.NOTICE, cls
+            return Severity.ERROR, Classification.DATA
+        return Severity.NOTICE, Classification.DATA
     # auditwheel-bundled shared libraries (*.libs/)
     if _is_auditwheel_lib(filename):
         return Severity.NOTICE, Classification.AUDITWHEEL
@@ -134,7 +139,7 @@ def _classify_file(
         if missing:
             return Severity.ERROR, Classification.EXTENSION_MODULE
         # Binary difference in an .so present on both sides is expected
-        return Severity.NOTICE, Classification.EXTENSION_MODULE
+        return Severity.EXPECTED, Classification.EXTENSION_MODULE
     return Severity.ERROR, Classification.OTHER
 
 

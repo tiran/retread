@@ -23,6 +23,39 @@ def _format_label(classification: Classification) -> str:
     return f" [{classification.value}]"
 
 
+def _severity_label(severity: Severity) -> str:
+    """Return a display label for a severity level."""
+    if severity is Severity.ERROR:
+        return "ERROR"
+    if severity is Severity.EXPECTED:
+        return "expected"
+    return "notice"
+
+
+def _format_entry(entry: FileEntry) -> str:
+    """Format a FileEntry as an indented line."""
+    label = _format_label(entry.classification)
+    return f"    {entry.filename}{label}"
+
+
+def _format_diff(diff: FileDiff) -> str:
+    """Format a FileDiff as an indented line."""
+    size_info = ""
+    if diff.upstream_size != diff.downstream_size:
+        size_info = f" ({diff.upstream_size} -> {diff.downstream_size} bytes)"
+    label = _format_label(diff.classification)
+    return f"    {diff.filename}{size_info}{label}"
+
+
+_SEVERITY_ORDER = (Severity.ERROR, Severity.NOTICE, Severity.EXPECTED)
+_SEVERITY_HEADERS = {
+    Severity.ERROR: "Errors",
+    Severity.NOTICE: "Notices",
+    Severity.EXPECTED: "Expected",
+}
+_TYPE_HEADERS = ("upstream only", "downstream only", "different")
+
+
 def _print_comparison(result: WheelComparison) -> None:
     """Print a wheel comparison result grouped by severity."""
     print(f"Upstream:   {result.upstream_wheel}")
@@ -32,49 +65,37 @@ def _print_comparison(result: WheelComparison) -> None:
         print(f"  {len(result.identical)} files match")
         return
 
-    errors: list[str] = []
-    notices: list[str] = []
-
+    # Collect items grouped by severity, then by type.
+    groups: dict[Severity, dict[str, list[str]]] = {
+        s: {t: [] for t in _TYPE_HEADERS} for s in _SEVERITY_ORDER
+    }
     for entry in result.only_upstream:
-        label = _format_label(entry.classification)
-        line = f"  - {entry.filename} (upstream only){label}"
-        if entry.severity is Severity.ERROR:
-            errors.append(line)
-        else:
-            notices.append(line)
-
+        groups[entry.severity]["upstream only"].append(_format_entry(entry))
     for entry in result.only_downstream:
-        label = _format_label(entry.classification)
-        line = f"  + {entry.filename} (downstream only){label}"
-        if entry.severity is Severity.ERROR:
-            errors.append(line)
-        else:
-            notices.append(line)
-
+        groups[entry.severity]["downstream only"].append(_format_entry(entry))
     for diff in result.different:
-        size_info = ""
-        if diff.upstream_size != diff.downstream_size:
-            size_info = f" ({diff.upstream_size} -> {diff.downstream_size} bytes)"
-        label = _format_label(diff.classification)
-        line = f"  ~ {diff.filename}{size_info}{label}"
-        if diff.severity is Severity.ERROR:
-            errors.append(line)
-        else:
-            notices.append(line)
+        groups[diff.severity]["different"].append(_format_diff(diff))
 
-    if errors:
-        print(f"\nErrors ({len(errors)}):")
-        for line in errors:
-            print(line)
-    else:
-        print("\nNo errors.")
-
-    if notices:
-        print(f"\nNotices ({len(notices)}):")
-        for line in notices:
-            print(line)
+    for severity in _SEVERITY_ORDER:
+        type_groups = groups[severity]
+        total = sum(len(v) for v in type_groups.values())
+        if not total:
+            continue
+        header = _SEVERITY_HEADERS[severity]
+        print(f"\n{header} ({total}):")
+        for type_name in _TYPE_HEADERS:
+            items = type_groups[type_name]
+            if items:
+                print(f"  {type_name}:")
+                for line in items:
+                    print(line)
 
     print(f"\nIdentical: {len(result.identical)}")
+
+    if result.has_errors:
+        print("\nResult: ERRORS found")
+    else:
+        print("\nResult: OK (notices only)")
 
 
 def _entry_to_dict(entry: FileEntry, side: str) -> dict[str, object]:

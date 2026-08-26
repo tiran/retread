@@ -45,12 +45,14 @@ def test_entry_to_dict() -> None:
 
 
 def test_diff_to_dict() -> None:
-    diff = FileDiff("foo.so", 100, 200, 111, 222, Severity.NOTICE, Classification.EXTENSION_MODULE)
+    diff = FileDiff(
+        "foo.so", 100, 200, 111, 222, Severity.EXPECTED, Classification.EXTENSION_MODULE
+    )
     d = _diff_to_dict(diff)
     assert d["filename"] == "foo.so"
     assert d["upstream_size"] == 100
     assert d["downstream_size"] == 200
-    assert d["severity"] == "notice"
+    assert d["severity"] == "expected"
     assert d["classification"] == "extension module"
 
 
@@ -68,20 +70,28 @@ def test_print_comparison_errors_and_notices(capsys, error_result: WheelComparis
     _print_comparison(error_result)
     out = capsys.readouterr().out
     assert "Errors (1):" in out
-    assert "  - missing.py (upstream only) [other]" in out
-    assert "Notices (2):" in out
+    assert "  upstream only:" in out
+    assert "    missing.py" in out
+    assert "Notices (1):" in out
+    assert "  downstream only:" in out
     assert "[dist-info]" in out
+    assert "Expected (1):" in out
+    assert "  different:" in out
     assert "[dist-info RECORD]" in out
+    assert "ERRORS found" in out
 
 
 def test_print_comparison_notice_only(capsys, notice_only_result: WheelComparison) -> None:
     _print_comparison(notice_only_result)
     out = capsys.readouterr().out
-    assert "No errors." in out
-    assert "Notices (2):" in out
+    assert "Notices (1):" in out
+    assert "  upstream only:" in out
     assert "[auditwheel]" in out
+    assert "Expected (1):" in out
+    assert "  different:" in out
     assert "(1000 -> 2000 bytes)" in out
     assert "[extension module]" in out
+    assert "OK (notices only)" in out
 
 
 @pytest.mark.parametrize(
@@ -109,7 +119,7 @@ def test_print_comparison_size_info(
                 down_size,
                 111,
                 222,
-                Severity.NOTICE,
+                Severity.EXPECTED,
                 Classification.EXTENSION_MODULE,
             ),
         ),
@@ -133,8 +143,10 @@ def test_print_comparison_downstream_only(capsys) -> None:
     )
     _print_comparison(result)
     out = capsys.readouterr().out
-    assert "  + extra.py (downstream only) [other]" in out
     assert "Errors (1):" in out
+    assert "  downstream only:" in out
+    assert "    extra.py" in out
+    assert "ERRORS found" in out
 
 
 # --- _print_json ---
