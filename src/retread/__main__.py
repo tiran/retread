@@ -1,11 +1,12 @@
 """CLI entry-point: ``python -m retread`` or ``retread``."""
 
-import argparse
 import asyncio
 import difflib
 import json
 import logging
 import sys
+
+import click
 
 from retread import backends
 from retread._api import async_diff, async_retread, sync_diff, sync_retread
@@ -226,6 +227,7 @@ def _print_file_diff(
 
 _SYNC_BACKENDS = {"requests": "RequestsBackend", "httpx2-sync": "Httpx2SyncBackend"}
 _ASYNC_BACKENDS = {"httpx2": "Httpx2Backend", "aiohttp": "AiohttpBackend"}
+_BACKEND_CHOICES = [*_SYNC_BACKENDS, *_ASYNC_BACKENDS]
 
 
 def _run_sync(
@@ -296,106 +298,11 @@ async def _run_diff_async(
         )
 
 
-def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(
-        prog="retread",
-        description="Compare downstream rebuilds of upstream wheels.",
-    )
-    subparsers = parser.add_subparsers(dest="command")
-
-    compare = subparsers.add_parser(
-        "compare",
-        help="compare a downstream wheel against its upstream source",
-    )
-    compare.add_argument(
-        "downstream",
-        help="URL, local file path, or wheel filename",
-    )
-    compare.add_argument(
-        "--downstream-index",
-        metavar="URL",
-        default=None,
-        help="resolve downstream filename from this Simple API index",
-    )
-    compare.add_argument(
-        "--upstream-index",
-        metavar="URL",
-        default="https://pypi.org/simple/",
-        help="upstream Simple API index (default: https://pypi.org/simple/)",
-    )
-    compare.add_argument(
-        "-b",
-        "--backend",
-        choices=["requests", "httpx2-sync", "httpx2", "aiohttp"],
-        default="requests",
-        help="HTTP backend to use (default: requests)",
-    )
-    compare.add_argument(
-        "-f",
-        "--format",
-        choices=["text", "json"],
-        default="text",
-        dest="output_format",
-        help="output format (default: text)",
-    )
-    compare.add_argument(
-        "-v",
-        "--verbose",
-        action="count",
-        default=0,
-        help="increase logging verbosity (-v INFO, -vv DEBUG retread, -vvv DEBUG all)",
-    )
-
-    diff = subparsers.add_parser(
-        "diff",
-        help="show unified diffs of files between upstream and downstream wheels",
-    )
-    diff.add_argument(
-        "downstream",
-        help="URL, local file path, or wheel filename",
-    )
-    diff.add_argument(
-        "files",
-        nargs="+",
-        metavar="file",
-        help="filenames (paths inside the wheel) to diff",
-    )
-    diff.add_argument(
-        "--downstream-index",
-        metavar="URL",
-        default=None,
-        help="resolve downstream filename from this Simple API index",
-    )
-    diff.add_argument(
-        "--upstream-index",
-        metavar="URL",
-        default="https://pypi.org/simple/",
-        help="upstream Simple API index (default: https://pypi.org/simple/)",
-    )
-    diff.add_argument(
-        "-b",
-        "--backend",
-        choices=["requests", "httpx2-sync", "httpx2", "aiohttp"],
-        default="requests",
-        help="HTTP backend to use (default: requests)",
-    )
-    diff.add_argument(
-        "-v",
-        "--verbose",
-        action="count",
-        default=0,
-        help="increase logging verbosity (-v INFO, -vv DEBUG retread, -vvv DEBUG all)",
-    )
-
-    args = parser.parse_args(argv)
-
-    if args.command is None:
-        parser.print_help()
-        sys.exit(2)
-
-    if args.verbose >= 3:
+def _setup_logging(verbose: int) -> None:
+    """Configure logging based on verbosity level."""
+    if verbose >= 3:
         level = logging.DEBUG
-    elif args.verbose >= 1:
+    elif verbose >= 1:
         level = logging.INFO
     else:
         level = logging.WARNING
@@ -404,64 +311,130 @@ def main(argv: list[str] | None = None) -> None:
         format="%(levelname)s: %(name)s: %(message)s",
         force=True,
     )
-    if args.verbose == 2:
+    if verbose == 2:
         logging.getLogger("retread").setLevel(logging.DEBUG)
 
+
+def _shared_options(func):
+    """Apply the shared CLI options for compare and diff subcommands."""
+    func = click.argument("downstream")(func)
+    func = click.option(
+        "--downstream-index",
+        metavar="URL",
+        default=None,
+        help="Resolve downstream filename from this Simple API index.",
+    )(func)
+    func = click.option(
+        "--upstream-index",
+        metavar="URL",
+        default="https://pypi.org/simple/",
+        show_default=True,
+        help="Upstream Simple API index.",
+    )(func)
+    func = click.option(
+        "-b",
+        "--backend",
+        type=click.Choice(_BACKEND_CHOICES),
+        default="requests",
+        show_default=True,
+        help="HTTP backend to use.",
+    )(func)
+    func = click.option(
+        "-v",
+        "--verbose",
+        count=True,
+        help="Increase logging verbosity (-v INFO, -vv DEBUG retread, -vvv DEBUG all).",
+    )(func)
+    return func
+
+
+@click.group(
+    context_settings={"help_option_names": ["-h", "--help"]},
+    invoke_without_command=True,
+)
+@click.pass_context
+def cli(ctx: click.Context) -> None:
+    """Compare downstream rebuilds of upstream wheels."""
+    if ctx.invoked_subcommand is None:
+        click.echo(ctx.get_help())
+        ctx.exit(2)
+
+
+@cli.command()
+@_shared_options
+@click.option(
+    "-f",
+    "--format",
+    "output_format",
+    type=click.Choice(["text", "json"]),
+    default="text",
+    show_default=True,
+    help="Output format.",
+)
+def compare(
+    downstream: str,
+    downstream_index: str | None,
+    upstream_index: str,
+    backend: str,
+    verbose: int,
+    output_format: str,
+) -> None:
+    """Compare a downstream wheel against its upstream source."""
+    _setup_logging(verbose)
     try:
-        result = None
-        if args.command == "compare":
-            if args.backend in _SYNC_BACKENDS:
-                result = _run_sync(
-                    args.downstream,
-                    args.backend,
-                    args.downstream_index,
-                    args.upstream_index,
-                )
-            else:
-                result = asyncio.run(
-                    _run_async(
-                        args.downstream,
-                        args.backend,
-                        args.downstream_index,
-                        args.upstream_index,
-                    )
-                )
-        elif args.command == "diff":
-            if args.backend in _SYNC_BACKENDS:
-                diff_results = _run_diff_sync(
-                    args.downstream,
-                    args.files,
-                    args.backend,
-                    args.downstream_index,
-                    args.upstream_index,
-                )
-            else:
-                diff_results = asyncio.run(
-                    _run_diff_async(
-                        args.downstream,
-                        args.files,
-                        args.backend,
-                        args.downstream_index,
-                        args.upstream_index,
-                    )
-                )
-            upstream_label = args.upstream_index
-            downstream_label = args.downstream_index or args.downstream
-            for fname, up_bytes, down_bytes in diff_results:
-                _print_file_diff(fname, up_bytes, down_bytes, upstream_label, downstream_label)
-            return
+        if backend in _SYNC_BACKENDS:
+            result = _run_sync(downstream, backend, downstream_index, upstream_index)
+        else:
+            result = asyncio.run(_run_async(downstream, backend, downstream_index, upstream_index))
     except RetreadError as exc:
         print(f"error: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    if result is not None:
-        if args.output_format == "json":
-            _print_json(result)
-        else:
-            _print_comparison(result)
+    if output_format == "json":
+        _print_json(result)
+    else:
+        _print_comparison(result)
 
-        if result.has_errors:
-            sys.exit(2)
+    if result.has_errors:
+        sys.exit(2)
+
+
+@cli.command()
+@_shared_options
+@click.argument("files", nargs=-1, required=True)
+def diff(
+    downstream: str,
+    downstream_index: str | None,
+    upstream_index: str,
+    backend: str,
+    verbose: int,
+    files: tuple[str, ...],
+) -> None:
+    """Show unified diffs of files between upstream and downstream wheels."""
+    _setup_logging(verbose)
+    try:
+        file_list = list(files)
+        if backend in _SYNC_BACKENDS:
+            diff_results = _run_diff_sync(
+                downstream, file_list, backend, downstream_index, upstream_index
+            )
+        else:
+            diff_results = asyncio.run(
+                _run_diff_async(downstream, file_list, backend, downstream_index, upstream_index)
+            )
+    except RetreadError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    upstream_label = upstream_index
+    downstream_label = downstream_index or downstream
+    for fname, up_bytes, down_bytes in diff_results:
+        _print_file_diff(fname, up_bytes, down_bytes, upstream_label, downstream_label)
+
+
+def main(argv: list[str] | None = None) -> None:
+    """Entry point for ``retread`` console script."""
+    cli(args=argv, standalone_mode=True)
 
 
 if __name__ == "__main__":  # pragma: no cover

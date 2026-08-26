@@ -11,7 +11,6 @@ from retread.__main__ import (
     _format_label,
     _print_comparison,
     _print_json,
-    main,
 )
 from retread._compare import (
     Classification,
@@ -185,14 +184,14 @@ def test_print_json_notice_only(capsys, notice_only_result: WheelComparison) -> 
 # --- main argument parsing ---
 
 
-def test_main_no_command() -> None:
-    with pytest.raises(SystemExit, match="2"):
-        main([])
+def test_main_no_command(invoke_cli) -> None:
+    result = invoke_cli([])
+    assert result.exit_code == 2
 
 
-def test_main_help() -> None:
-    with pytest.raises(SystemExit, match="0"):
-        main(["--help"])
+def test_main_help(invoke_cli) -> None:
+    result = invoke_cli(["--help"])
+    assert result.exit_code == 0
 
 
 # --- RECORD mismatches ---

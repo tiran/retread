@@ -8,4 +8,3 @@
 ## CLI and library improvements
 
 - Consider using pydantic for data validation and serialization.
-- Consider using click instead of argparse for the CLI.
