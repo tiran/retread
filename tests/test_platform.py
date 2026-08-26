@@ -184,7 +184,7 @@ def test_cpython_ext_wrong_version():
 
 
 def test_cpython_ext_free_threaded():
-    """cpython free-threaded extension (e.g. .cpython-313t-...) is detected."""
+    """cpython free-threaded extension with correct tags produces no version warning."""
     infos = {
         "foo/_bar.cpython-313t-x86_64-linux-gnu.so": FakeInfo(
             "foo/_bar.cpython-313t-x86_64-linux-gnu.so"
@@ -193,12 +193,22 @@ def test_cpython_ext_free_threaded():
     tags_313t = frozenset({Tag("cp313", "cp313t", "linux_x86_64")})
     wheel_bytes = make_wheel_file(False, ["cp313-cp313t-linux_x86_64"])
     warnings = _check_single_wheel("upstream", infos, wheel_bytes, tags_313t, "foo", "1.0")
-    # The regex captures "313t" as the version string, so it looks for cp313t
+    # The trailing 't' is stripped: "313t" → interpreter "cp313", which matches
     cpython_warns = [w for w in warnings if "cpython-specific" in w.message]
-    # cp313t won't match cp313 interpreter, but cp313 is in tag_interpreters
-    # The version extracted is "313t", expected interp is "cp313t"
-    # tag_interpreters is {"cp313"}, so cp313t not in tag_interpreters → warning
-    assert any("cp313t" in w.message for w in cpython_warns)
+    assert cpython_warns == []
+
+
+def test_cpython_ext_free_threaded_wrong_version():
+    """cpython free-threaded extension with wrong version tag produces a warning."""
+    infos = {
+        "foo/_bar.cpython-313t-x86_64-linux-gnu.so": FakeInfo(
+            "foo/_bar.cpython-313t-x86_64-linux-gnu.so"
+        ),
+    }
+    wheel_bytes = make_wheel_file(False, ["cp312-cp312-linux_x86_64"])
+    warnings = _check_single_wheel("upstream", infos, wheel_bytes, _LINUX_TAGS, "foo", "1.0")
+    cpython_warns = [w for w in warnings if "cpython-specific" in w.message]
+    assert any("cp313" in w.message for w in cpython_warns)
 
 
 def test_abi3_ext_with_abi3_tag():

@@ -168,7 +168,9 @@ def _check_single_wheel(
 
         # Check 3: cpython-specific extensions must match version tags
         for ver in sorted(cpython_versions):
-            expected_interp = f"cp{ver}"
+            # Strip trailing 't' (free-threaded marker); the 't' belongs
+            # to the ABI tag (e.g. cp313t), not the interpreter (cp313).
+            expected_interp = f"cp{ver.rstrip('t')}"
             if expected_interp not in tag_interpreters:
                 warnings.append(
                     PlatformWarning(

@@ -2,7 +2,7 @@
 
 import pytest
 
-from retread.__main__ import _print_file_diff
+from retread.__main__ import _print_file_diff, main
 
 
 class TestPrintFileDiff:
@@ -70,7 +70,5 @@ class TestDiffCLIParsing:
     """Tests for diff subcommand argument parsing."""
 
     def test_diff_help(self):
-        from retread.__main__ import main
-
         with pytest.raises(SystemExit, match="0"):
             main(["diff", "--help"])

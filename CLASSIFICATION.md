@@ -145,10 +145,10 @@ If a wheel contains shared libraries but all filename tags use the
 platform-specific and need a concrete platform tag (e.g.
 `linux_x86_64`, `manylinux_2_28_aarch64`).
 
-Conversely, if a wheel has platform-specific tags and
-`Root-Is-Purelib: false` but contains no shared libraries or native
-extensions, a warning is raised.  This typically indicates a pure
-Python package that was incorrectly built as a platform wheel.
+Conversely, if a wheel has platform-specific tags but contains no
+shared libraries or native extensions, a warning is raised.  This
+typically indicates a pure Python package that was incorrectly built
+as a platform wheel.
 
 ### CPython extension version matching
 

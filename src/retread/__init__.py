@@ -1,6 +1,6 @@
 """Compare downstream rebuilds of upstream wheels to detect differences and bugs.
 
-A retread is a rebuilt tire -- **retread** rebuilds wheels and checks quality.
+A retread is a rebuilt tire -- **retread** checks the quality of rebuilt wheels.
 
 Uses `zipwire <https://github.com/tiran/zipwire>`_ for efficient remote
 wheel access via HTTP range requests and
@@ -15,7 +15,7 @@ the upstream automatically::
 
     from retread import sync_retread
 
-    result = sync_retread("https://rebuild.example.com/.../foo-1.0-py3-none-any.whl")
+    result = sync_retread("https://rebuild.example/.../foo-1.0-py3-none-any.whl")
     if result.is_identical:
         print("Wheels are identical")
     else:
@@ -30,7 +30,7 @@ Low-level API — manage your own RemoteZip objects::
 
     async def main():
         upstream_url = "https://files.pythonhosted.org/.../foo-1.0-py3-none-any.whl"
-        downstream_url = "https://rebuild.example.com/.../foo-1.0-py3-none-any.whl"
+        downstream_url = "https://rebuild.example/.../foo-1.0-py3-none-any.whl"
 
         u_reader = AiohttpReader(upstream_url)
         d_reader = AiohttpReader(downstream_url)
