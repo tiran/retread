@@ -1,9 +1,5 @@
 # Future plans
 
-## CLI
-
-- `diff` subcommand to show diff / content of text files
-
 ## WHEEL property validation
 
 - Validate `Root-Is-Purelib` property against wheel tags.

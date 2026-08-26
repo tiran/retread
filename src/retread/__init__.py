@@ -54,7 +54,7 @@ Asynchronous:
     (``pip install retread[httpx2]``)
 """
 
-from retread._api import async_retread, sync_retread
+from retread._api import async_diff, async_retread, sync_diff, sync_retread
 from retread._compare import (
     Classification,
     FileDiff,
@@ -88,8 +88,10 @@ __all__ = [
     "WheelNotFoundError",
     "WheelSpec",
     "async_compare_wheels",
+    "async_diff",
     "async_retread",
     "compare_wheels",
     "parse_wheel_spec",
+    "sync_diff",
     "sync_retread",
 ]

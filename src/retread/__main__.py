@@ -2,12 +2,13 @@
 
 import argparse
 import asyncio
+import difflib
 import json
 import logging
 import sys
 
 from retread import backends
-from retread._api import async_retread, sync_retread
+from retread._api import async_diff, async_retread, sync_diff, sync_retread
 from retread._compare import (
     Classification,
     FileDiff,
@@ -151,6 +152,66 @@ def _print_json(result: WheelComparison) -> None:
     print()
 
 
+def _print_file_diff(
+    filename: str,
+    upstream_bytes: bytes | None,
+    downstream_bytes: bytes | None,
+    upstream_label: str,
+    downstream_label: str,
+) -> None:
+    """Print a unified diff or status message for a single file."""
+    if upstream_bytes is None and downstream_bytes is None:
+        print(f"--- {filename} ---")
+        print("File not found in either wheel.")
+        return
+
+    if upstream_bytes is None:
+        print(f"--- {filename} ---")
+        print(f"Only in downstream: {downstream_label}")
+        try:
+            text = downstream_bytes.decode("utf-8")  # type: ignore[union-attr]
+            for line in text.splitlines():
+                print(f"  {line}")
+        except (UnicodeDecodeError, ValueError):
+            print("  Binary file.")
+        return
+
+    if downstream_bytes is None:
+        print(f"--- {filename} ---")
+        print(f"Only in upstream: {upstream_label}")
+        try:
+            text = upstream_bytes.decode("utf-8")
+            for line in text.splitlines():
+                print(f"  {line}")
+        except (UnicodeDecodeError, ValueError):
+            print("  Binary file.")
+        return
+
+    if upstream_bytes == downstream_bytes:
+        print(f"--- {filename} ---")
+        print("Files are identical.")
+        return
+
+    # Both present and different
+    try:
+        upstream_text = upstream_bytes.decode("utf-8")
+        downstream_text = downstream_bytes.decode("utf-8")
+    except (UnicodeDecodeError, ValueError):
+        print(f"--- {filename} ---")
+        print("Binary files differ.")
+        return
+
+    diff_lines = difflib.unified_diff(
+        upstream_text.splitlines(keepends=True),
+        downstream_text.splitlines(keepends=True),
+        fromfile=f"upstream/{filename}",
+        tofile=f"downstream/{filename}",
+    )
+    for line in diff_lines:
+        # unified_diff lines may or may not end with newline
+        print(line, end="" if line.endswith("\n") else "\n")
+
+
 _SYNC_BACKENDS = {"requests": "RequestsBackend", "httpx2-sync": "Httpx2SyncBackend"}
 _ASYNC_BACKENDS = {"httpx2": "Httpx2Backend", "aiohttp": "AiohttpBackend"}
 
@@ -181,6 +242,42 @@ async def _run_async(
     async with backend_cls() as be:
         return await async_retread(
             downstream,
+            downstream_index=downstream_index,
+            upstream_index=upstream_index,
+            backend=be,
+        )
+
+
+def _run_diff_sync(
+    downstream: str,
+    files: list[str],
+    backend_name: str,
+    downstream_index: str | None,
+    upstream_index: str,
+) -> list[tuple[str, bytes | None, bytes | None]]:
+    backend_cls = getattr(backends, _SYNC_BACKENDS[backend_name])
+    with backend_cls() as be:
+        return sync_diff(
+            downstream,
+            files,
+            downstream_index=downstream_index,
+            upstream_index=upstream_index,
+            backend=be,
+        )
+
+
+async def _run_diff_async(
+    downstream: str,
+    files: list[str],
+    backend_name: str,
+    downstream_index: str | None,
+    upstream_index: str,
+) -> list[tuple[str, bytes | None, bytes | None]]:
+    backend_cls = getattr(backends, _ASYNC_BACKENDS[backend_name])
+    async with backend_cls() as be:
+        return await async_diff(
+            downstream,
+            files,
             downstream_index=downstream_index,
             upstream_index=upstream_index,
             backend=be,
@@ -237,6 +334,47 @@ def main(argv: list[str] | None = None) -> None:
         help="increase logging verbosity (-v INFO, -vv DEBUG retread, -vvv DEBUG all)",
     )
 
+    diff = subparsers.add_parser(
+        "diff",
+        help="show unified diffs of files between upstream and downstream wheels",
+    )
+    diff.add_argument(
+        "downstream",
+        help="URL, local file path, or wheel filename",
+    )
+    diff.add_argument(
+        "files",
+        nargs="+",
+        metavar="file",
+        help="filenames (paths inside the wheel) to diff",
+    )
+    diff.add_argument(
+        "--downstream-index",
+        metavar="URL",
+        default=None,
+        help="resolve downstream filename from this Simple API index",
+    )
+    diff.add_argument(
+        "--upstream-index",
+        metavar="URL",
+        default="https://pypi.org/simple/",
+        help="upstream Simple API index (default: https://pypi.org/simple/)",
+    )
+    diff.add_argument(
+        "-b",
+        "--backend",
+        choices=["requests", "httpx2-sync", "httpx2", "aiohttp"],
+        default="requests",
+        help="HTTP backend to use (default: requests)",
+    )
+    diff.add_argument(
+        "-v",
+        "--verbose",
+        action="count",
+        default=0,
+        help="increase logging verbosity (-v INFO, -vv DEBUG retread, -vvv DEBUG all)",
+    )
+
     args = parser.parse_args(argv)
 
     if args.command is None:
@@ -276,6 +414,30 @@ def main(argv: list[str] | None = None) -> None:
                         args.upstream_index,
                     )
                 )
+        elif args.command == "diff":
+            if args.backend in _SYNC_BACKENDS:
+                diff_results = _run_diff_sync(
+                    args.downstream,
+                    args.files,
+                    args.backend,
+                    args.downstream_index,
+                    args.upstream_index,
+                )
+            else:
+                diff_results = asyncio.run(
+                    _run_diff_async(
+                        args.downstream,
+                        args.files,
+                        args.backend,
+                        args.downstream_index,
+                        args.upstream_index,
+                    )
+                )
+            upstream_label = args.upstream_index
+            downstream_label = args.downstream_index or args.downstream
+            for fname, up_bytes, down_bytes in diff_results:
+                _print_file_diff(fname, up_bytes, down_bytes, upstream_label, downstream_label)
+            return
     except RetreadError as exc:
         print(f"error: {exc}", file=sys.stderr)
         sys.exit(1)
