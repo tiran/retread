@@ -15,15 +15,13 @@ from retread._compare import (
     _compare,
     _is_auditwheel_lib,
     _is_shared_library,
-    _is_url,
     _local_zip_infos,
     _metadata_core_match,
-    _parse_name_version,
-    _wheel_basename,
     compare_local_wheel,
     compare_wheels,
 )
 from retread._errors import InvalidWheelError
+from retread._resolve import _is_url, _parse_name_version, _wheel_basename
 
 from .conftest import (
     DOWNSTREAM_URL,

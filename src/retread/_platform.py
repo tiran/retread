@@ -16,6 +16,9 @@ from typing import Any
 
 import packaging.utils
 from packaging.utils import InvalidWheelFilename
+from packaging.version import Version
+
+from retread._resolve import _extract_raw_version
 
 if typing.TYPE_CHECKING:
     from packaging.tags import Tag
@@ -58,14 +61,45 @@ def _check_single_wheel(
     filename_tags: frozenset[Tag],
     dist: str,
     version: str,
+    *,
+    metadata_bytes: bytes | None = None,
+    wheel_filename: str = "",
 ) -> list[PlatformWarning]:
     """Check a single wheel for platform and ABI consistency.
 
     Scans the wheel's filenames for shared libraries and extension
     modules, then validates them against the wheel's tags and
-    ``Root-Is-Purelib`` property.
+    ``Root-Is-Purelib`` property.  Also checks version normalization
+    and METADATA version consistency.
     """
     warnings: list[PlatformWarning] = []
+
+    # Version normalization check
+    if wheel_filename:
+        raw_ver = _extract_raw_version(wheel_filename)
+        normalized_ver = str(Version(raw_ver))
+        if normalized_ver != raw_ver:
+            warnings.append(
+                PlatformWarning(
+                    side,
+                    f"wheel filename version '{raw_ver}' is not normalized"
+                    f" (expected '{normalized_ver}')",
+                )
+            )
+
+        # METADATA Version vs filename version check
+        if metadata_bytes is not None:
+            parser = email.parser.BytesParser()
+            meta = parser.parsebytes(metadata_bytes)
+            meta_version = meta.get("Version", "").strip()
+            if meta_version and meta_version != normalized_ver:
+                warnings.append(
+                    PlatformWarning(
+                        side,
+                        f"METADATA Version '{meta_version}' does not match"
+                        f" filename version '{normalized_ver}'",
+                    )
+                )
 
     has_shared_libs = False
     cpython_versions: set[str] = set()
@@ -225,12 +259,16 @@ def check_platform_abi(
     downstream_infos: dict[str, Any],
     upstream_wheel: bytes | None = None,
     downstream_wheel: bytes | None = None,
+    upstream_metadata: bytes | None = None,
+    downstream_metadata: bytes | None = None,
 ) -> WheelComparison:
     """Validate platform and ABI consistency for both wheels.
 
     Reads the ``WHEEL`` file from each side and cross-checks
     ``Root-Is-Purelib`` and tag entries against the actual file
     contents of the wheel (shared libraries, extension modules).
+    Also validates version normalization and METADATA version
+    consistency.
     """
     warnings: list[PlatformWarning] = []
 
@@ -249,14 +287,28 @@ def check_platform_abi(
     down_version = str(result.downstream_version)
 
     upstream_warnings = _check_single_wheel(
-        "upstream", upstream_infos, upstream_wheel, upstream_tags, up_dist, up_version
+        "upstream",
+        upstream_infos,
+        upstream_wheel,
+        upstream_tags,
+        up_dist,
+        up_version,
+        metadata_bytes=upstream_metadata,
+        wheel_filename=result.upstream_wheel,
     )
     for w in upstream_warnings:
         logger.info("platform check [%s]: %s", w.side, w.message)
     warnings.extend(upstream_warnings)
 
     downstream_warnings = _check_single_wheel(
-        "downstream", downstream_infos, downstream_wheel, downstream_tags, up_dist, down_version
+        "downstream",
+        downstream_infos,
+        downstream_wheel,
+        downstream_tags,
+        up_dist,
+        down_version,
+        metadata_bytes=downstream_metadata,
+        wheel_filename=result.downstream_wheel,
     )
     for w in downstream_warnings:
         logger.info("platform check [%s]: %s", w.side, w.message)
