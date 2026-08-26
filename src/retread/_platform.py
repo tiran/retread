@@ -252,14 +252,14 @@ def check_platform_abi(
         "upstream", upstream_infos, upstream_wheel, upstream_tags, up_dist, up_version
     )
     for w in upstream_warnings:
-        logger.warning("platform check [%s]: %s", w.side, w.message)
+        logger.info("platform check [%s]: %s", w.side, w.message)
     warnings.extend(upstream_warnings)
 
     downstream_warnings = _check_single_wheel(
         "downstream", downstream_infos, downstream_wheel, downstream_tags, up_dist, down_version
     )
     for w in downstream_warnings:
-        logger.warning("platform check [%s]: %s", w.side, w.message)
+        logger.info("platform check [%s]: %s", w.side, w.message)
     warnings.extend(downstream_warnings)
 
     if not warnings:

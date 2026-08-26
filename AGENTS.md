@@ -45,6 +45,11 @@ package indexes.
   Every commit message must include a `Signed-off-by:` line.
 - Keep commit messages high-level. Focus on user-visible and API impact,
   not internal implementation details.
+- **All changes must go through a branch and pull request.** Do not
+  commit directly to `main`. Create a feature branch, commit there,
+  and open a PR.
+- **PR description must match the commit message.** Do not add test
+  plan checklists or other noise to the PR body.
 
 ## Commands
 
