@@ -19,7 +19,10 @@ import typing
 import zipfile
 from typing import Any
 
+from packaging.version import Version
+
 from retread._errors import InvalidWheelError
+from retread._record import RecordMismatch, check_records
 
 if typing.TYPE_CHECKING:
     import collections.abc
@@ -174,6 +177,11 @@ class WheelComparison:
         downstream: Identifier (URL or path) of the downstream rebuild.
         upstream_wheel: Wheel filename of the upstream wheel.
         downstream_wheel: Wheel filename of the downstream rebuild.
+        dist: Distribution name extracted from the wheel filenames.
+        upstream_version: Version from the upstream wheel filename.
+        downstream_version: Version from the downstream wheel filename.
+            Usually identical to *upstream_version* but may differ when
+            local-version segments differ (e.g. ``1.0+cpu`` vs ``1.0``).
         only_upstream: Files present only in the upstream wheel.
         only_downstream: Files present only in the downstream rebuild.
         different: Files present in both but with different content.
@@ -184,10 +192,14 @@ class WheelComparison:
     downstream: str
     upstream_wheel: str
     downstream_wheel: str
+    dist: str
+    upstream_version: Version
+    downstream_version: Version
     only_upstream: tuple[FileEntry, ...]
     only_downstream: tuple[FileEntry, ...]
     different: tuple[FileDiff, ...]
     identical: tuple[str, ...]
+    record_mismatches: tuple[RecordMismatch, ...] = ()
 
     @property
     def is_identical(self) -> bool:
@@ -201,7 +213,19 @@ class WheelComparison:
             any(entry.severity is Severity.ERROR for entry in self.only_upstream)
             or any(entry.severity is Severity.ERROR for entry in self.only_downstream)
             or any(diff.severity is Severity.ERROR for diff in self.different)
+            or bool(self.record_mismatches)
         )
+
+
+def _read_record(
+    infos: dict[str, Any],
+    read: collections.abc.Callable[[str], bytes],
+    record_path: str,
+) -> bytes | None:
+    """Read a RECORD file if it exists, otherwise return ``None``."""
+    if record_path not in infos:
+        return None
+    return read(record_path)
 
 
 def compare_wheels(
@@ -215,15 +239,25 @@ def compare_wheels(
     and uncompressed sizes from the central directory, so no file
     content is downloaded.
     """
+    upstream_infos = {info.filename: info for info in upstream.infolist() if not info.is_dir()}
+    downstream_infos = {info.filename: info for info in downstream.infolist() if not info.is_dir()}
     result = _compare(
         upstream=upstream.url,
         downstream=downstream.url,
-        upstream_infos={info.filename: info for info in upstream.infolist() if not info.is_dir()},
-        downstream_infos={
-            info.filename: info for info in downstream.infolist() if not info.is_dir()
-        },
+        upstream_infos=upstream_infos,
+        downstream_infos=downstream_infos,
     )
-    return _check_metadata(result, upstream.read, downstream.read)
+    result = _check_metadata(result, upstream.read, downstream.read)
+    up_record_path = f"{result.dist}-{result.upstream_version}.dist-info/RECORD"
+    down_record_path = f"{result.dist}-{result.downstream_version}.dist-info/RECORD"
+    result = check_records(
+        result,
+        upstream_infos=upstream_infos,
+        downstream_infos=downstream_infos,
+        upstream_record=_read_record(upstream_infos, upstream.read, up_record_path),
+        downstream_record=_read_record(downstream_infos, downstream.read, down_record_path),
+    )
+    return result
 
 
 async def async_compare_wheels(
@@ -231,38 +265,86 @@ async def async_compare_wheels(
     downstream: AsyncRemoteZip,
 ) -> WheelComparison:
     """Async version of :func:`compare_wheels`."""
+    upstream_infos = {info.filename: info for info in upstream.infolist() if not info.is_dir()}
+    downstream_infos = {info.filename: info for info in downstream.infolist() if not info.is_dir()}
     result = _compare(
         upstream=upstream.url,
         downstream=downstream.url,
-        upstream_infos={info.filename: info for info in upstream.infolist() if not info.is_dir()},
-        downstream_infos={
-            info.filename: info for info in downstream.infolist() if not info.is_dir()
-        },
+        upstream_infos=upstream_infos,
+        downstream_infos=downstream_infos,
     )
 
-    metadata_diffs = [
-        diff for diff in result.different if diff.filename.endswith(".dist-info/METADATA")
-    ]
-    if not metadata_diffs:
-        return result
+    upstream_metadata = f"{result.dist}-{result.upstream_version}.dist-info/METADATA"
+    downstream_metadata = f"{result.dist}-{result.downstream_version}.dist-info/METADATA"
+    upstream_record = f"{result.dist}-{result.upstream_version}.dist-info/RECORD"
+    downstream_record = f"{result.dist}-{result.downstream_version}.dist-info/RECORD"
 
-    # Pre-fetch all needed metadata files in parallel
-    reads = []
+    # Find METADATA in `different` (same-version case)
+    metadata_diffs = [diff for diff in result.different if diff.filename == upstream_metadata]
+
+    # Detect cross-version METADATA (different-version case)
+    has_cross_metadata = (
+        upstream_metadata != downstream_metadata
+        and any(e.filename == upstream_metadata for e in result.only_upstream)
+        and any(e.filename == downstream_metadata for e in result.only_downstream)
+    )
+
+    # Pre-fetch all needed METADATA and RECORD files in parallel
+    reads: list[collections.abc.Coroutine[Any, Any, bytes]] = []
+    metadata_keys: list[tuple[str, str]] = []  # (side, filename)
     for diff in metadata_diffs:
         reads.append(upstream.read(diff.filename))
+        metadata_keys.append(("upstream", diff.filename))
         reads.append(downstream.read(diff.filename))
-    results = await asyncio.gather(*reads)
-    upstream_data: dict[str, bytes] = {}
-    downstream_data: dict[str, bytes] = {}
-    for i, diff in enumerate(metadata_diffs):
-        upstream_data[diff.filename] = results[i * 2]
-        downstream_data[diff.filename] = results[i * 2 + 1]
+        metadata_keys.append(("downstream", diff.filename))
 
-    return _check_metadata(
+    if has_cross_metadata:
+        reads.append(upstream.read(upstream_metadata))
+        metadata_keys.append(("upstream", upstream_metadata))
+        reads.append(downstream.read(downstream_metadata))
+        metadata_keys.append(("downstream", downstream_metadata))
+
+    record_keys: list[str] = []
+    for record_path, infos, rz in [
+        (upstream_record, upstream_infos, upstream),
+        (downstream_record, downstream_infos, downstream),
+    ]:
+        if record_path in infos:
+            reads.append(rz.read(record_path))
+            record_keys.append(record_path)
+
+    fetched = await asyncio.gather(*reads) if reads else []
+
+    # Unpack metadata reads
+    upstream_meta: dict[str, bytes] = {}
+    downstream_meta: dict[str, bytes] = {}
+    for idx, (side, fname) in enumerate(metadata_keys):
+        if side == "upstream":
+            upstream_meta[fname] = fetched[idx]
+        else:
+            downstream_meta[fname] = fetched[idx]
+
+    if metadata_diffs or has_cross_metadata:
+        result = _check_metadata(
+            result,
+            upstream_meta.__getitem__,
+            downstream_meta.__getitem__,
+        )
+
+    # Unpack record reads
+    record_data: dict[str, bytes] = {}
+    offset = len(metadata_keys)
+    for idx, fname in enumerate(record_keys):
+        record_data[fname] = fetched[offset + idx]
+
+    result = check_records(
         result,
-        upstream_data.__getitem__,
-        downstream_data.__getitem__,
+        upstream_infos=upstream_infos,
+        downstream_infos=downstream_infos,
+        upstream_record=record_data.get(upstream_record),
+        downstream_record=record_data.get(downstream_record),
     )
+    return result
 
 
 def _compare(
@@ -273,7 +355,12 @@ def _compare(
 ) -> WheelComparison:
     upstream_whl = _wheel_basename(upstream)
     downstream_whl = _wheel_basename(downstream)
-    dist, dist_version = _parse_name_version(upstream_whl)
+    dist, upstream_ver_str = _parse_name_version(upstream_whl)
+    downstream_dist, downstream_ver_str = _parse_name_version(downstream_whl)
+    if dist != downstream_dist:
+        raise InvalidWheelError(
+            f"dist name mismatch: upstream {dist!r} != downstream {downstream_dist!r}"
+        )
     upstream_names = set(upstream_infos)
     downstream_names = set(downstream_infos)
 
@@ -288,7 +375,7 @@ def _compare(
         if u_info.CRC == d_info.CRC and u_info.file_size == d_info.file_size:
             identical.append(fname)
         else:
-            severity, classification = _classify_file(fname, dist=dist, version=dist_version)
+            severity, classification = _classify_file(fname, dist=dist, version=upstream_ver_str)
             different.append(
                 FileDiff(
                     filename=fname,
@@ -301,9 +388,15 @@ def _compare(
                 )
             )
 
-    def _make_entry(fname: str) -> FileEntry:
+    def _make_upstream_entry(fname: str) -> FileEntry:
         severity, classification = _classify_file(
-            fname, dist=dist, version=dist_version, missing=True
+            fname, dist=dist, version=upstream_ver_str, missing=True
+        )
+        return FileEntry(filename=fname, severity=severity, classification=classification)
+
+    def _make_downstream_entry(fname: str) -> FileEntry:
+        severity, classification = _classify_file(
+            fname, dist=dist, version=downstream_ver_str, missing=True
         )
         return FileEntry(filename=fname, severity=severity, classification=classification)
 
@@ -312,8 +405,11 @@ def _compare(
         downstream=downstream,
         upstream_wheel=upstream_whl,
         downstream_wheel=downstream_whl,
-        only_upstream=tuple(_make_entry(fname) for fname in only_upstream),
-        only_downstream=tuple(_make_entry(fname) for fname in only_downstream),
+        dist=dist,
+        upstream_version=Version(upstream_ver_str),
+        downstream_version=Version(downstream_ver_str),
+        only_upstream=tuple(_make_upstream_entry(fname) for fname in only_upstream),
+        only_downstream=tuple(_make_downstream_entry(fname) for fname in only_downstream),
         different=tuple(different),
         identical=tuple(identical),
     )
@@ -347,23 +443,74 @@ def _check_metadata(
     read_upstream: collections.abc.Callable[[str], bytes],
     read_downstream: collections.abc.Callable[[str], bytes],
 ) -> WheelComparison:
-    """Upgrade METADATA diff severity to ERROR if core fields differ."""
-    metadata_diffs = [
-        (i, diff)
-        for i, diff in enumerate(result.different)
-        if diff.filename.endswith(".dist-info/METADATA")
-    ]
-    if not metadata_diffs:
+    """Upgrade METADATA diff severity to ERROR if core fields differ.
+
+    Handles two cases:
+
+    * **Same dist-info prefix** (common): both METADATA files share a
+      filename and appear in *result.different*.
+    * **Different dist-info prefix** (e.g. local-version differs): the
+      two METADATA files have different paths and appear in
+      *only_upstream* / *only_downstream*.  Core fields are still
+      compared and severities updated accordingly.
+    """
+    upstream_metadata = f"{result.dist}-{result.upstream_version}.dist-info/METADATA"
+    downstream_metadata = f"{result.dist}-{result.downstream_version}.dist-info/METADATA"
+
+    if upstream_metadata == downstream_metadata:
+        # Same dist-info prefix: METADATA appears in `different`
+        metadata_diffs = [
+            (i, diff)
+            for i, diff in enumerate(result.different)
+            if diff.filename == upstream_metadata
+        ]
+        if not metadata_diffs:
+            return result
+        new_different = list(result.different)
+        for i, diff in metadata_diffs:
+            upstream_bytes = read_upstream(diff.filename)
+            downstream_bytes = read_downstream(diff.filename)
+            if not _metadata_core_match(upstream_bytes, downstream_bytes):
+                new_different[i] = dataclasses.replace(diff, severity=Severity.ERROR)
+        return dataclasses.replace(result, different=tuple(new_different))
+
+    # Different dist-info prefixes: METADATA split across only_upstream / only_downstream
+    up_idx = next(
+        (i for i, e in enumerate(result.only_upstream) if e.filename == upstream_metadata),
+        None,
+    )
+    down_idx = next(
+        (i for i, e in enumerate(result.only_downstream) if e.filename == downstream_metadata),
+        None,
+    )
+    if up_idx is None or down_idx is None:
         return result
 
-    new_different = list(result.different)
-    for i, diff in metadata_diffs:
-        upstream_bytes = read_upstream(diff.filename)
-        downstream_bytes = read_downstream(diff.filename)
-        if not _metadata_core_match(upstream_bytes, downstream_bytes):
-            new_different[i] = dataclasses.replace(diff, severity=Severity.ERROR)
+    upstream_bytes = read_upstream(upstream_metadata)
+    downstream_bytes = read_downstream(downstream_metadata)
+    severity = (
+        Severity.NOTICE
+        if _metadata_core_match(upstream_bytes, downstream_bytes)
+        else Severity.ERROR
+    )
 
-    return dataclasses.replace(result, different=tuple(new_different))
+    new_only_upstream = list(result.only_upstream)
+    new_only_downstream = list(result.only_downstream)
+    new_only_upstream[up_idx] = dataclasses.replace(
+        result.only_upstream[up_idx],
+        severity=severity,
+        classification=Classification.METADATA,
+    )
+    new_only_downstream[down_idx] = dataclasses.replace(
+        result.only_downstream[down_idx],
+        severity=severity,
+        classification=Classification.METADATA,
+    )
+    return dataclasses.replace(
+        result,
+        only_upstream=tuple(new_only_upstream),
+        only_downstream=tuple(new_only_downstream),
+    )
 
 
 def _local_zip_infos(path: pathlib.Path) -> dict[str, zipfile.ZipInfo]:
@@ -382,14 +529,25 @@ def compare_local_wheel(
     provides ``.CRC``, ``.file_size``, ``.filename``, and ``.is_dir()``
     — the same attributes used from ``zipwire.RemoteZipInfo``.
     """
+    upstream_infos = {info.filename: info for info in upstream.infolist() if not info.is_dir()}
+    downstream_infos = _local_zip_infos(downstream_path)
     result = _compare(
         upstream=upstream.url,
         downstream=str(downstream_path),
-        upstream_infos={info.filename: info for info in upstream.infolist() if not info.is_dir()},
-        downstream_infos=_local_zip_infos(downstream_path),
+        upstream_infos=upstream_infos,
+        downstream_infos=downstream_infos,
     )
+    up_record_path = f"{result.dist}-{result.upstream_version}.dist-info/RECORD"
+    down_record_path = f"{result.dist}-{result.downstream_version}.dist-info/RECORD"
     with zipfile.ZipFile(downstream_path) as ds_zf:
         result = _check_metadata(result, upstream.read, ds_zf.read)
+        result = check_records(
+            result,
+            upstream_infos=upstream_infos,
+            downstream_infos=downstream_infos,
+            upstream_record=_read_record(upstream_infos, upstream.read, up_record_path),
+            downstream_record=_read_record(downstream_infos, ds_zf.read, down_record_path),
+        )
     return result
 
 
@@ -398,24 +556,56 @@ async def async_compare_local_wheel(
     downstream_path: pathlib.Path,
 ) -> WheelComparison:
     """Async version of :func:`compare_local_wheel`."""
+    upstream_infos = {info.filename: info for info in upstream.infolist() if not info.is_dir()}
+    downstream_infos = _local_zip_infos(downstream_path)
     result = _compare(
         upstream=upstream.url,
         downstream=str(downstream_path),
-        upstream_infos={info.filename: info for info in upstream.infolist() if not info.is_dir()},
-        downstream_infos=_local_zip_infos(downstream_path),
+        upstream_infos=upstream_infos,
+        downstream_infos=downstream_infos,
     )
-    metadata_diffs = [
-        diff for diff in result.different if diff.filename.endswith(".dist-info/METADATA")
-    ]
-    if not metadata_diffs:
-        return result
+    upstream_metadata = f"{result.dist}-{result.upstream_version}.dist-info/METADATA"
+    downstream_metadata = f"{result.dist}-{result.downstream_version}.dist-info/METADATA"
+    upstream_record = f"{result.dist}-{result.upstream_version}.dist-info/RECORD"
 
-    filenames = [diff.filename for diff in metadata_diffs]
-    results = await asyncio.gather(*(upstream.read(f) for f in filenames))
-    upstream_data = dict(zip(filenames, results, strict=True))
+    # Find METADATA in `different` (same-version case)
+    metadata_diffs = [diff for diff in result.different if diff.filename == upstream_metadata]
 
+    # Detect cross-version METADATA (different-version case)
+    has_cross_metadata = (
+        upstream_metadata != downstream_metadata
+        and any(e.filename == upstream_metadata for e in result.only_upstream)
+        and any(e.filename == downstream_metadata for e in result.only_downstream)
+    )
+
+    # Pre-fetch upstream METADATA and RECORD files in parallel
+    reads: list[collections.abc.Coroutine[Any, Any, bytes]] = []
+    read_keys: list[str] = []
+    for diff in metadata_diffs:
+        reads.append(upstream.read(diff.filename))
+        read_keys.append(diff.filename)
+
+    if has_cross_metadata:
+        reads.append(upstream.read(upstream_metadata))
+        read_keys.append(upstream_metadata)
+
+    if upstream_record in upstream_infos:
+        reads.append(upstream.read(upstream_record))
+        read_keys.append(upstream_record)
+
+    fetched = await asyncio.gather(*reads) if reads else []
+    upstream_data = dict(zip(read_keys, fetched, strict=True))
+
+    down_record_path = f"{result.dist}-{result.downstream_version}.dist-info/RECORD"
     with zipfile.ZipFile(downstream_path) as ds_zf:
         result = _check_metadata(result, upstream_data.__getitem__, ds_zf.read)
+        result = check_records(
+            result,
+            upstream_infos=upstream_infos,
+            downstream_infos=downstream_infos,
+            upstream_record=upstream_data.get(upstream_record),
+            downstream_record=_read_record(downstream_infos, ds_zf.read, down_record_path),
+        )
     return result
 
 

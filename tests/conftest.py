@@ -3,6 +3,7 @@
 import zipfile
 
 import pytest
+from packaging.version import Version
 
 from retread._compare import (
     Classification,
@@ -76,6 +77,20 @@ def make_metadata(name: str, version: str, requires: list[str] | None = None) ->
     return "\n".join(lines).encode()
 
 
+_FAKE_SHA256 = "A" * 43  # valid-length urlsafe-base64 sha256 digest
+
+
+def make_record(files: dict[str, int], dist_info: str = "foo-1.0.dist-info") -> bytes:
+    """Build a minimal RECORD file as bytes.
+
+    *files* maps filenames to sizes.  The RECORD entry itself is
+    appended with empty hash and size columns.
+    """
+    lines = [f"{fn},sha256={_FAKE_SHA256},{size}" for fn, size in files.items()]
+    lines.append(f"{dist_info}/RECORD,,")
+    return "\n".join(lines).encode()
+
+
 def make_wheel(path, files: dict[str, str]) -> None:
     """Create a minimal .whl (zip) file with the given files."""
     with zipfile.ZipFile(path, "w") as zf:
@@ -97,6 +112,9 @@ def identical_result() -> WheelComparison:
         downstream="down",
         upstream_wheel="foo-1.0-py3-none-any.whl",
         downstream_wheel="foo-1.0-py3-none-any.whl",
+        dist="foo",
+        upstream_version=Version("1.0"),
+        downstream_version=Version("1.0"),
         only_upstream=(),
         only_downstream=(),
         different=(),
@@ -112,6 +130,9 @@ def error_result() -> WheelComparison:
         downstream="down",
         upstream_wheel="foo-1.0-py3-none-any.whl",
         downstream_wheel="foo-1.0-py3-none-any.whl",
+        dist="foo",
+        upstream_version=Version("1.0"),
+        downstream_version=Version("1.0"),
         only_upstream=(FileEntry("missing.py", Severity.ERROR, Classification.OTHER),),
         only_downstream=(
             FileEntry(
@@ -143,6 +164,9 @@ def notice_only_result() -> WheelComparison:
         downstream="down",
         upstream_wheel="foo-1.0-py3-none-any.whl",
         downstream_wheel="foo-1.0-py3-none-any.whl",
+        dist="foo",
+        upstream_version=Version("1.0"),
+        downstream_version=Version("1.0"),
         only_upstream=(FileEntry("foo.libs/bar.so", Severity.NOTICE, Classification.AUDITWHEEL),),
         only_downstream=(),
         different=(

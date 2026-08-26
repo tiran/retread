@@ -23,6 +23,14 @@ package indexes.
 - Run any Python tool via `.venv/bin/python -m <tool>` or `.venv/bin/<tool>`.
 - Use `uv pip install --python .venv/bin/python` for all pip operations.
 
+## Wheel structure rules
+
+- A wheel may contain multiple `.dist-info/` directories (e.g. vendored
+  packages nest their own dist-info inside subdirectories). Always use the
+  **root-level** `.dist-info/` directory whose name matches
+  `{dist_name}-{dist_version}.dist-info/` (derived from the wheel filename).
+  Never assume there is only one `.dist-info/` directory in a wheel.
+
 ## Code style rules
 
 - **No local imports.** All imports must be at the top of the file.

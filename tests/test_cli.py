@@ -3,6 +3,7 @@
 import json
 
 import pytest
+from packaging.version import Version
 
 from retread.__main__ import (
     _diff_to_dict,
@@ -16,6 +17,7 @@ from retread._compare import (
     Classification,
     FileDiff,
     FileEntry,
+    RecordMismatch,
     Severity,
     WheelComparison,
 )
@@ -110,6 +112,9 @@ def test_print_comparison_size_info(
         downstream="down",
         upstream_wheel="foo-1.0-py3-none-any.whl",
         downstream_wheel="foo-1.0-py3-none-any.whl",
+        dist="foo",
+        upstream_version=Version("1.0"),
+        downstream_version=Version("1.0"),
         only_upstream=(),
         only_downstream=(),
         different=(
@@ -136,6 +141,9 @@ def test_print_comparison_downstream_only(capsys) -> None:
         downstream="down",
         upstream_wheel="foo-1.0-py3-none-any.whl",
         downstream_wheel="foo-1.0-py3-none-any.whl",
+        dist="foo",
+        upstream_version=Version("1.0"),
+        downstream_version=Version("1.0"),
         only_upstream=(),
         only_downstream=(FileEntry("extra.py", Severity.ERROR, Classification.OTHER),),
         different=(),
@@ -185,3 +193,104 @@ def test_main_no_command() -> None:
 def test_main_help() -> None:
     with pytest.raises(SystemExit, match="0"):
         main(["--help"])
+
+
+# --- RECORD mismatches ---
+
+
+def test_print_comparison_record_mismatches(capsys) -> None:
+    result = WheelComparison(
+        upstream="up",
+        downstream="down",
+        upstream_wheel="foo-1.0-py3-none-any.whl",
+        downstream_wheel="foo-1.0-py3-none-any.whl",
+        dist="foo",
+        upstream_version=Version("1.0"),
+        downstream_version=Version("1.0"),
+        only_upstream=(),
+        only_downstream=(),
+        different=(),
+        identical=("foo/__init__.py",),
+        record_mismatches=(
+            RecordMismatch("upstream", "file in ZIP but not in RECORD: extra.py"),
+            RecordMismatch("downstream", "size mismatch for foo.py: RECORD says 99, ZIP says 100"),
+        ),
+    )
+    _print_comparison(result)
+    out = capsys.readouterr().out
+    assert "RECORD mismatches (2):" in out
+    assert "[upstream] file in ZIP but not in RECORD: extra.py" in out
+    assert "[downstream] size mismatch for foo.py: RECORD says 99, ZIP says 100" in out
+
+
+def test_print_comparison_record_mismatches_with_diffs(capsys) -> None:
+    result = WheelComparison(
+        upstream="up",
+        downstream="down",
+        upstream_wheel="foo-1.0-py3-none-any.whl",
+        downstream_wheel="foo-1.0-py3-none-any.whl",
+        dist="foo",
+        upstream_version=Version("1.0"),
+        downstream_version=Version("1.0"),
+        only_upstream=(),
+        only_downstream=(),
+        different=(
+            FileDiff(
+                "foo-1.0.dist-info/RECORD",
+                500,
+                600,
+                111,
+                222,
+                Severity.EXPECTED,
+                Classification.RECORD,
+            ),
+        ),
+        identical=(),
+        record_mismatches=(RecordMismatch("upstream", "file in ZIP but not in RECORD: extra.py"),),
+    )
+    _print_comparison(result)
+    out = capsys.readouterr().out
+    assert "RECORD mismatches (1):" in out
+    assert "[upstream] file in ZIP but not in RECORD: extra.py" in out
+
+
+def test_print_json_record_mismatches(capsys) -> None:
+    result = WheelComparison(
+        upstream="up",
+        downstream="down",
+        upstream_wheel="foo-1.0-py3-none-any.whl",
+        downstream_wheel="foo-1.0-py3-none-any.whl",
+        dist="foo",
+        upstream_version=Version("1.0"),
+        downstream_version=Version("1.0"),
+        only_upstream=(),
+        only_downstream=(),
+        different=(),
+        identical=("foo/__init__.py",),
+        record_mismatches=(RecordMismatch("upstream", "file in ZIP but not in RECORD: extra.py"),),
+    )
+    _print_json(result)
+    data = json.loads(capsys.readouterr().out)
+    assert "record_mismatches" in data
+    assert len(data["record_mismatches"]) == 1
+    assert data["record_mismatches"][0]["side"] == "upstream"
+    assert "extra.py" in data["record_mismatches"][0]["message"]
+
+
+def test_print_json_no_record_mismatches(capsys) -> None:
+    result = WheelComparison(
+        upstream="up",
+        downstream="down",
+        upstream_wheel="foo-1.0-py3-none-any.whl",
+        downstream_wheel="foo-1.0-py3-none-any.whl",
+        dist="foo",
+        upstream_version=Version("1.0"),
+        downstream_version=Version("1.0"),
+        only_upstream=(),
+        only_downstream=(),
+        different=(),
+        identical=("foo/__init__.py",),
+    )
+    _print_json(result)
+    data = json.loads(capsys.readouterr().out)
+    assert data["record_mismatches"] == []

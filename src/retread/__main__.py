@@ -63,6 +63,10 @@ def _print_comparison(result: WheelComparison) -> None:
     if result.is_identical:
         print("Wheels are identical.")
         print(f"  {len(result.identical)} files match")
+        if result.record_mismatches:
+            print(f"\nRECORD mismatches ({len(result.record_mismatches)}):")
+            for w in result.record_mismatches:
+                print(f"  [{w.side}] {w.message}")
         return
 
     # Collect items grouped by severity, then by type.
@@ -91,6 +95,11 @@ def _print_comparison(result: WheelComparison) -> None:
                     print(line)
 
     print(f"\nIdentical: {len(result.identical)}")
+
+    if result.record_mismatches:
+        print(f"\nRECORD mismatches ({len(result.record_mismatches)}):")
+        for w in result.record_mismatches:
+            print(f"  [{w.side}] {w.message}")
 
     if result.has_errors:
         print("\nResult: ERRORS found")
@@ -134,6 +143,9 @@ def _print_json(result: WheelComparison) -> None:
         "only_downstream": [_entry_to_dict(e, "downstream") for e in result.only_downstream],
         "different": [_diff_to_dict(d) for d in result.different],
         "identical": list(result.identical),
+        "record_mismatches": [
+            {"side": w.side, "message": w.message} for w in result.record_mismatches
+        ],
     }
     json.dump(data, sys.stdout, indent=2)
     print()

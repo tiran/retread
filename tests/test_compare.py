@@ -3,6 +3,7 @@
 import zipfile
 
 import pytest
+from packaging.version import Version
 
 from retread._compare import (
     Classification,
@@ -30,6 +31,7 @@ from .conftest import (
     FakeInfo,
     FakeRemoteZip,
     make_metadata,
+    make_record,
     make_wheel,
 )
 
@@ -368,6 +370,9 @@ def _metadata_diff_result():
         downstream="down",
         upstream_wheel="foo-1.0-py3-none-any.whl",
         downstream_wheel="foo-1.0-py3-none-any.whl",
+        dist="foo",
+        upstream_version=Version("1.0"),
+        downstream_version=Version("1.0"),
         only_upstream=(),
         only_downstream=(),
         different=(diff,),
@@ -413,6 +418,9 @@ def test_check_metadata_no_metadata_diffs() -> None:
         downstream="down",
         upstream_wheel="foo-1.0-py3-none-any.whl",
         downstream_wheel="foo-1.0-py3-none-any.whl",
+        dist="foo",
+        upstream_version=Version("1.0"),
+        downstream_version=Version("1.0"),
         only_upstream=(),
         only_downstream=(),
         different=(diff,),
@@ -471,3 +479,46 @@ def test_compare_local_wheel_different(tmp_path) -> None:
     result = compare_local_wheel(upstream, downstream_path)
     assert not result.is_identical
     assert result.has_errors
+
+
+# --- compare_wheels with RECORD ---
+
+
+def test_compare_wheels_record_mismatches() -> None:
+    """compare_wheels populates record_mismatches on mismatch."""
+    # RECORD lists wrong size
+    record_bytes = make_record({"foo/__init__.py": 999})
+    info = FakeInfo("foo/__init__.py", crc=123, file_size=50)
+    record_info = FakeInfo("foo-1.0.dist-info/RECORD", crc=111, file_size=len(record_bytes))
+    upstream = FakeRemoteZip(
+        UPSTREAM_URL,
+        [info, record_info],
+        {"foo-1.0.dist-info/RECORD": record_bytes},
+    )
+    downstream = FakeRemoteZip(
+        DOWNSTREAM_URL,
+        [info, record_info],
+        {"foo-1.0.dist-info/RECORD": record_bytes},
+    )
+    result = compare_wheels(upstream, downstream)
+    assert len(result.record_mismatches) > 0
+    assert any("size mismatch" in w.message for w in result.record_mismatches)
+
+
+def test_compare_wheels_no_record_mismatches() -> None:
+    """compare_wheels with consistent RECORD produces no warnings."""
+    record_bytes = make_record({"foo/__init__.py": 50})
+    info = FakeInfo("foo/__init__.py", crc=123, file_size=50)
+    record_info = FakeInfo("foo-1.0.dist-info/RECORD", crc=111, file_size=len(record_bytes))
+    upstream = FakeRemoteZip(
+        UPSTREAM_URL,
+        [info, record_info],
+        {"foo-1.0.dist-info/RECORD": record_bytes},
+    )
+    downstream = FakeRemoteZip(
+        DOWNSTREAM_URL,
+        [info, record_info],
+        {"foo-1.0.dist-info/RECORD": record_bytes},
+    )
+    result = compare_wheels(upstream, downstream)
+    assert result.record_mismatches == ()

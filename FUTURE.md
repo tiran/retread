@@ -9,6 +9,13 @@
 - Validate `Root-Is-Purelib` property against wheel tags.
 - Validate that `Tag` property and wheel filename tags are aligned.
 
+## Version validation
+
+- Verify that wheel filename versions are PEP 440 normalized
+  (`str(Version(v)) == v`).  Path construction for dist-info / data
+  directories assumes normalized versions; a non-normalized version
+  would produce wrong lookup paths.
+
 ## Platform and ABI checks
 
 - Wheels with shared libraries must be platlib and have a platform-specific
