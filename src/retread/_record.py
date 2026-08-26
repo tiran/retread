@@ -156,27 +156,27 @@ def check_records(
     ]:
         if record_bytes is None:
             msg = f"missing RECORD: {record_path}"
-            logger.warning("RECORD check [%s]: %s", side, msg)
+            logger.info("RECORD check [%s]: %s", side, msg)
             mismatches.append(RecordMismatch(side, msg))
             continue
         try:
             record_files, parse_errors = _parse_record(record_bytes, record_path)
         except Exception:
             msg = f"malformed RECORD: {record_path}"
-            logger.warning("RECORD check [%s]: %s", side, msg)
+            logger.info("RECORD check [%s]: %s", side, msg)
             mismatches.append(RecordMismatch(side, msg))
             continue
         for err in parse_errors:
-            logger.warning("RECORD check [%s]: %s", side, err)
+            logger.info("RECORD check [%s]: %s", side, err)
             mismatches.append(RecordMismatch(side, err))
         if not record_files and not parse_errors:
             msg = f"empty RECORD: {record_path}"
-            logger.warning("RECORD check [%s]: %s", side, msg)
+            logger.info("RECORD check [%s]: %s", side, msg)
             mismatches.append(RecordMismatch(side, msg))
             continue
         side_mismatches = _check_record(side, record_files, infos, record_path)
         for m in side_mismatches:
-            logger.warning("RECORD check [%s]: %s", side, m.message)
+            logger.info("RECORD check [%s]: %s", side, m.message)
         mismatches.extend(side_mismatches)
 
     if not mismatches:
