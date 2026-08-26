@@ -3,8 +3,10 @@
 import zipfile
 
 import pytest
+from click.testing import CliRunner
 from packaging.version import Version
 
+from retread.__main__ import cli
 from retread._compare import (
     Classification,
     FileDiff,
@@ -195,3 +197,14 @@ def notice_only_result() -> WheelComparison:
         ),
         identical=("foo/__init__.py",),
     )
+
+
+@pytest.fixture()
+def invoke_cli():
+    """Invoke the retread CLI via CliRunner."""
+    runner = CliRunner()
+
+    def _invoke(args):
+        return runner.invoke(cli, args)
+
+    return _invoke

@@ -1,8 +1,6 @@
 """Tests for the diff subcommand and _print_file_diff."""
 
-import pytest
-
-from retread.__main__ import _print_file_diff, main
+from retread.__main__ import _print_file_diff
 
 
 class TestPrintFileDiff:
@@ -69,6 +67,6 @@ class TestPrintFileDiff:
 class TestDiffCLIParsing:
     """Tests for diff subcommand argument parsing."""
 
-    def test_diff_help(self):
-        with pytest.raises(SystemExit, match="0"):
-            main(["diff", "--help"])
+    def test_diff_help(self, invoke_cli):
+        result = invoke_cli(["diff", "--help"])
+        assert result.exit_code == 0
