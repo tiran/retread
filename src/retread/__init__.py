@@ -70,6 +70,7 @@ from retread._errors import (
     RetreadError,
     WheelNotFoundError,
 )
+from retread._platform import PlatformWarning
 from retread._pypi import AsyncPyPISimple
 from retread._record import RecordMismatch
 from retread._resolve import WheelSpec, parse_wheel_spec
@@ -81,6 +82,7 @@ __all__ = [
     "FileDiff",
     "FileEntry",
     "InvalidWheelError",
+    "PlatformWarning",
     "RecordMismatch",
     "RetreadError",
     "Severity",

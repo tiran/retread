@@ -1,21 +1,23 @@
 # Classifying wheel differences
 
 When retread compares an upstream wheel against a downstream rebuild, every
-differing or missing file is assigned a **severity** (`notice` or `error`) and
-a **classification** label that explains *why* the difference is expected or
-not.
+differing or missing file is assigned a **severity** and a **classification**
+label.  Additional structural checks validate RECORD integrity, METADATA
+consistency, and platform/ABI correctness.
 
 ## Severity
 
-| Severity | Meaning |
-|----------|---------|
-| `notice` | Expected difference -- the rebuild is still considered good. |
-| `error`  | Unexpected difference -- the rebuild may be broken or contain unwanted changes. |
+| Severity   | Meaning |
+|------------|---------|
+| `expected` | Always-expected difference (RECORD, WHEEL, compiled binaries). |
+| `notice`   | Acceptable difference -- the rebuild is still considered good. |
+| `error`    | Unexpected difference -- the rebuild may be broken or contain unwanted changes. |
 
-A comparison exits with code 0 when all differences are notices, and code 2
-when at least one error is present.
+A comparison exits with code 0 when all differences are expected or notices,
+and code 2 when at least one error, RECORD mismatch, or platform warning is
+present.
 
-## Classification labels
+## File classification
 
 Classification labels are shown in square brackets in CLI output
 (e.g. `[dist-info RECORD]`, `[extension module]`).  They are derived from
@@ -26,17 +28,19 @@ filename (no normalisation).
 ### dist-info files
 
 The `{dist}-{version}.dist-info/` directory contains package metadata.
-All differences here are notices because downstream rebuilds routinely
-modify these files.
 
-| Classification | Path pattern | Notes |
-|----------------|--------------|-------|
-| `dist-info METADATA` | `{dist}-{version}.dist-info/METADATA` | Core metadata fields (Name, Version, Requires-Dist, Provides-Extra) are compared separately; if they differ the severity is upgraded to error. |
-| `dist-info RECORD` | `{dist}-{version}.dist-info/RECORD` | File hash manifest -- always differs when any file changes. |
-| `dist-info WHEEL` | `{dist}-{version}.dist-info/WHEEL` | Wheel metadata (generator tag, etc.). |
-| `sbom` | `{dist}-{version}.dist-info/sboms/...` | Software bill of materials files. |
-| `license` | `{dist}-{version}.dist-info/licenses/...` | License files. |
-| `dist-info` | Any other `{dist}-{version}.dist-info/...` | Catch-all for other dist-info files (e.g. fromager build metadata). |
+| Classification | Path pattern | Severity (diff) | Severity (missing) |
+|----------------|--------------|------------------|--------------------|
+| `dist-info RECORD` | `RECORD` | expected | expected |
+| `dist-info WHEEL` | `WHEEL` | expected | expected |
+| `dist-info METADATA` | `METADATA` | notice | notice |
+| `sbom` | `sboms/...` | notice | notice |
+| `license` | `licenses/...` | notice | notice |
+| `dist-info` | anything else | notice | notice |
+
+RECORD and WHEEL always differ when any file changes or the build
+environment differs.  METADATA differences are notices unless core
+fields differ (see [METADATA validation](#metadata-validation) below).
 
 ### Data directory
 
@@ -46,19 +50,19 @@ non-purelib locations as defined by the wheel spec (`scripts`, `data`,
 
 | Classification | Path pattern | Severity (diff) | Severity (missing) |
 |----------------|--------------|------------------|--------------------|
-| `data scripts` | `{dist}-{version}.data/scripts/...` | notice | error |
-| `data` | `{dist}-{version}.data/{other}/...` | notice | error |
+| `data scripts` | `scripts/...` | expected | error |
+| `data` | any other subdir | notice | error |
 
-Binary differences in data files are expected (compiled executables,
-platform-specific resources).  Missing files are errors because they
-indicate the downstream wheel is incomplete.
+Binary differences in data scripts are expected (compiled executables).
+Missing files are errors because they indicate the downstream wheel is
+incomplete.
 
 ### Shared libraries
 
 | Classification | Path pattern | Severity (diff) | Severity (missing) |
 |----------------|--------------|------------------|--------------------|
 | `auditwheel` | `{dist}.libs/...` | notice | notice |
-| `extension module` | `*.so` (not in `*.libs/`) | notice | error |
+| `extension module` | `*.so` (not in `*.libs/`) | expected | error |
 
 **auditwheel** vendors external shared libraries into a `{dist}.libs/`
 directory.  These may appear, disappear, or change between builds -- all
@@ -74,15 +78,117 @@ sides.
 |----------------|---------|
 | `other` | Any file that does not match the patterns above.  Always an error. |
 
+## METADATA validation
+
+After initial file comparison, retread reads the `METADATA` file from
+both sides and compares the following core fields:
+
+- `Name` (single-value, exact match)
+- `Version` (single-value, exact match)
+- `Requires-Dist` (multi-value, compared as sorted lists)
+- `Provides-Extra` (multi-value, compared as sorted lists)
+
+If the core fields match, the METADATA diff stays at `notice` severity.
+If they differ, the severity is upgraded to `error`.  Non-core fields
+(Description, Author, classifiers, etc.) are ignored.
+
+When upstream and downstream use different dist-info prefixes (e.g.
+different local-version segments), the METADATA files appear in
+`only_upstream` / `only_downstream` rather than `different`.  Core
+fields are still compared and severities are updated accordingly.
+
+## RECORD validation
+
+Each wheel's `RECORD` file (CSV manifest) is cross-validated against
+the ZIP central directory.  Issues are reported as **RECORD mismatches**
+and always trigger an error exit.
+
+### Structure checks
+
+- Each CSV row must have exactly 3 fields: `filename,hash,size`.
+- Hash must use `algorithm=digest` format (e.g. `sha256=...`).
+- Size must be a valid integer.
+- Only the RECORD file itself and its deprecated signatures
+  (`RECORD.p7s`, `RECORD.jws`) may have empty hash and size columns.
+
+### Consistency checks
+
+- Files present in the ZIP but not listed in RECORD.
+- Files listed in RECORD but not present in the ZIP.
+- Size mismatches between RECORD and the ZIP central directory.
+- Missing or empty RECORD file.
+
+## Platform and ABI checks
+
+Each wheel is independently validated for internal consistency between
+its filename tags, `WHEEL` file properties, and actual file contents.
+Issues are reported as **platform warnings** and trigger an error exit.
+
+### WHEEL Tag vs filename tag alignment
+
+The `Tag` entries in the `WHEEL` file must match the tags encoded in
+the wheel filename.  A mismatch indicates the wheel was repacked or
+renamed incorrectly.  The warning lists tags present only in the
+WHEEL file and tags present only in the filename.
+
+### Root-Is-Purelib consistency
+
+If a wheel contains shared libraries (`.so` files, excluding
+auditwheel `*.libs/` directories) but the `WHEEL` file sets
+`Root-Is-Purelib: true`, a warning is raised.  Shared libraries
+require platlib installation.
+
+### Platform tag consistency
+
+If a wheel contains shared libraries but all filename tags use the
+`any` platform, a warning is raised.  Shared libraries are
+platform-specific and need a concrete platform tag (e.g.
+`linux_x86_64`, `manylinux_2_28_aarch64`).
+
+Conversely, if a wheel has platform-specific tags and
+`Root-Is-Purelib: false` but contains no shared libraries or native
+extensions, a warning is raised.  This typically indicates a pure
+Python package that was incorrectly built as a platform wheel.
+
+### CPython extension version matching
+
+Extension modules with cpython-specific suffixes like
+`.cpython-312-x86_64-linux-gnu.so` embed the Python version.  The
+wheel's filename tags must include the corresponding interpreter
+(e.g. `cp312`).  A mismatch indicates the wheel was built for a
+different Python version than its tags claim.
+
+### Stable ABI (abi3 / abi3t) consistency
+
+Extensions using the stable ABI (`.abi3.so`) or the free-threaded
+stable ABI (`.abi3t.so`) require:
+
+- At least one filename tag with `abi3` as the ABI component.
+- A CPython interpreter (`cp3*`) in the filename tags.
+
+### Data scripts heuristic
+
+If `{dist}-{version}.data/scripts/` contains files larger than 8 KiB
+and no shared libraries are otherwise present, but the wheel claims
+`Root-Is-Purelib: true` or uses the `any` platform tag, a warning is
+raised.  Large script files suggest native executables that require a
+platform-specific tag.  This check is a heuristic and may produce
+false positives for wheels with large shell scripts.
+
 ## Example output
 
 ```
 Errors (1):
-  - PIL/_avif.cpython-312-x86_64-linux-gnu.so (upstream only) [extension module]
+  upstream only:
+    PIL/_avif.cpython-312-x86_64-linux-gnu.so [extension module]
 
-Notices (4):
-  - pillow.libs/libXau-154567c4.so.6.0.0 (upstream only) [auditwheel]
-  - pillow-12.3.0.dist-info/sboms/auditwheel.cdx.json (upstream only) [sbom]
-  ~ PIL/_imaging.cpython-312-x86_64-linux-gnu.so (3402345 -> 1990328 bytes) [extension module]
-  ~ pillow-12.3.0.dist-info/RECORD (11349 -> 9920 bytes) [dist-info RECORD]
+Notices (2):
+  upstream only:
+    pillow.libs/libXau-154567c4.so.6.0.0 [auditwheel]
+    pillow-12.3.0.dist-info/sboms/auditwheel.cdx.json [sbom]
+
+Expected (2):
+  different:
+    PIL/_imaging.cpython-312-x86_64-linux-gnu.so (3402345 -> 1990328 bytes) [extension module]
+    pillow-12.3.0.dist-info/RECORD (11349 -> 9920 bytes) [dist-info RECORD]
 ```

@@ -1,21 +1,29 @@
 # retread
 
-A retread is a rebuilt tire -- **retread** rebuilds wheels and checks quality.
+**retread** inspects and compares Python wheels. Given a downstream
+rebuild, it resolves the corresponding upstream wheel and reports which
+files differ, are missing, or were added — without downloading entire
+wheel files.
 
-**retread** compares downstream rebuilds of upstream Python wheels to detect
-differences and bugs. It uses [zipwire](https://github.com/tiran/zipwire) for
-efficient remote wheel access via HTTP range requests and
+It uses [zipwire](https://github.com/tiran/zipwire) for efficient
+remote wheel access via HTTP range requests and
 [pypi-simple](https://github.com/jwodder/pypi-simple) to interact with
 package indexes.
+
+> **Note:** retread does not rebuild wheels. It only inspects and
+> compares existing wheels.
 
 ## Features
 
 - Compare upstream and downstream wheels without downloading entire files
 - Detect missing, extra, and modified files between wheel builds
 - CRC-32 based fast comparison from ZIP central directory metadata
+- Platform and ABI consistency checks (shared libraries, extension
+  modules, `Root-Is-Purelib`, tag validation)
+- Show unified diffs of individual files between wheels
 - Both synchronous and asynchronous APIs
 - Pluggable HTTP backends: requests (default), httpx2, aiohttp
-- CLI for quick comparisons
+- Text and JSON output formats
 
 ## Installation
 
@@ -29,6 +37,38 @@ With optional async HTTP backends:
 pip install retread[aiohttp]    # aiohttp (async)
 pip install retread[httpx2]     # httpx2 (async, HTTP/2)
 pip install retread[all]        # all backends
+```
+
+## Usage
+
+### Compare wheels
+
+Compare a downstream wheel against its upstream source on PyPI:
+
+```bash
+# Compare by URL
+retread compare https://rebuild.example/foo-1.0-py3-none-any.whl
+
+# Compare a local wheel file
+retread compare /path/to/foo-1.0-py3-none-any.whl
+
+# Resolve from a downstream index
+retread compare foo-1.0-py3-none-any.whl --downstream-index https://rebuild.example/simple/
+
+# JSON output
+retread compare foo-1.0-py3-none-any.whl --downstream-index https://rebuild.example/simple/ -f json
+```
+
+### Diff files
+
+Show unified diffs of specific files between upstream and downstream wheels:
+
+```bash
+# Diff the METADATA file
+retread diff https://rebuild.example/foo-1.0-py3-none-any.whl foo-1.0.dist-info/METADATA
+
+# Diff multiple files
+retread diff /path/to/foo-1.0-py3-none-any.whl foo-1.0.dist-info/METADATA foo-1.0.dist-info/WHEEL
 ```
 
 ## Limitations

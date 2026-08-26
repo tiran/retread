@@ -22,6 +22,7 @@ from typing import Any
 from packaging.version import Version
 
 from retread._errors import InvalidWheelError
+from retread._platform import PlatformWarning, check_platform_abi
 from retread._record import RecordMismatch, check_records
 
 if typing.TYPE_CHECKING:
@@ -200,6 +201,7 @@ class WheelComparison:
     different: tuple[FileDiff, ...]
     identical: tuple[str, ...]
     record_mismatches: tuple[RecordMismatch, ...] = ()
+    platform_warnings: tuple[PlatformWarning, ...] = ()
 
     @property
     def is_identical(self) -> bool:
@@ -214,6 +216,7 @@ class WheelComparison:
             or any(entry.severity is Severity.ERROR for entry in self.only_downstream)
             or any(diff.severity is Severity.ERROR for diff in self.different)
             or bool(self.record_mismatches)
+            or bool(self.platform_warnings)
         )
 
 
@@ -257,6 +260,15 @@ def compare_wheels(
         upstream_record=_read_record(upstream_infos, upstream.read, up_record_path),
         downstream_record=_read_record(downstream_infos, downstream.read, down_record_path),
     )
+    up_wheel_path = f"{result.dist}-{result.upstream_version}.dist-info/WHEEL"
+    down_wheel_path = f"{result.dist}-{result.downstream_version}.dist-info/WHEEL"
+    result = check_platform_abi(
+        result,
+        upstream_infos=upstream_infos,
+        downstream_infos=downstream_infos,
+        upstream_wheel=_read_record(upstream_infos, upstream.read, up_wheel_path),
+        downstream_wheel=_read_record(downstream_infos, downstream.read, down_wheel_path),
+    )
     return result
 
 
@@ -278,6 +290,8 @@ async def async_compare_wheels(
     downstream_metadata = f"{result.dist}-{result.downstream_version}.dist-info/METADATA"
     upstream_record = f"{result.dist}-{result.upstream_version}.dist-info/RECORD"
     downstream_record = f"{result.dist}-{result.downstream_version}.dist-info/RECORD"
+    upstream_wheel_path = f"{result.dist}-{result.upstream_version}.dist-info/WHEEL"
+    downstream_wheel_path = f"{result.dist}-{result.downstream_version}.dist-info/WHEEL"
 
     # Find METADATA in `different` (same-version case)
     metadata_diffs = [diff for diff in result.different if diff.filename == upstream_metadata]
@@ -289,7 +303,7 @@ async def async_compare_wheels(
         and any(e.filename == downstream_metadata for e in result.only_downstream)
     )
 
-    # Pre-fetch all needed METADATA and RECORD files in parallel
+    # Pre-fetch all needed METADATA, RECORD, and WHEEL files in parallel
     reads: list[collections.abc.Coroutine[Any, Any, bytes]] = []
     metadata_keys: list[tuple[str, str]] = []  # (side, filename)
     for diff in metadata_diffs:
@@ -312,6 +326,15 @@ async def async_compare_wheels(
         if record_path in infos:
             reads.append(rz.read(record_path))
             record_keys.append(record_path)
+
+    wheel_keys: list[str] = []
+    for wheel_path, infos, rz in [
+        (upstream_wheel_path, upstream_infos, upstream),
+        (downstream_wheel_path, downstream_infos, downstream),
+    ]:
+        if wheel_path in infos:
+            reads.append(rz.read(wheel_path))
+            wheel_keys.append(wheel_path)
 
     fetched = await asyncio.gather(*reads) if reads else []
 
@@ -343,6 +366,20 @@ async def async_compare_wheels(
         downstream_infos=downstream_infos,
         upstream_record=record_data.get(upstream_record),
         downstream_record=record_data.get(downstream_record),
+    )
+
+    # Unpack wheel reads
+    wheel_data: dict[str, bytes] = {}
+    offset = len(metadata_keys) + len(record_keys)
+    for idx, fname in enumerate(wheel_keys):
+        wheel_data[fname] = fetched[offset + idx]
+
+    result = check_platform_abi(
+        result,
+        upstream_infos=upstream_infos,
+        downstream_infos=downstream_infos,
+        upstream_wheel=wheel_data.get(upstream_wheel_path),
+        downstream_wheel=wheel_data.get(downstream_wheel_path),
     )
     return result
 
@@ -539,6 +576,8 @@ def compare_local_wheel(
     )
     up_record_path = f"{result.dist}-{result.upstream_version}.dist-info/RECORD"
     down_record_path = f"{result.dist}-{result.downstream_version}.dist-info/RECORD"
+    up_wheel_path = f"{result.dist}-{result.upstream_version}.dist-info/WHEEL"
+    down_wheel_path = f"{result.dist}-{result.downstream_version}.dist-info/WHEEL"
     with zipfile.ZipFile(downstream_path) as ds_zf:
         result = _check_metadata(result, upstream.read, ds_zf.read)
         result = check_records(
@@ -547,6 +586,13 @@ def compare_local_wheel(
             downstream_infos=downstream_infos,
             upstream_record=_read_record(upstream_infos, upstream.read, up_record_path),
             downstream_record=_read_record(downstream_infos, ds_zf.read, down_record_path),
+        )
+        result = check_platform_abi(
+            result,
+            upstream_infos=upstream_infos,
+            downstream_infos=downstream_infos,
+            upstream_wheel=_read_record(upstream_infos, upstream.read, up_wheel_path),
+            downstream_wheel=_read_record(downstream_infos, ds_zf.read, down_wheel_path),
         )
     return result
 
@@ -567,6 +613,7 @@ async def async_compare_local_wheel(
     upstream_metadata = f"{result.dist}-{result.upstream_version}.dist-info/METADATA"
     downstream_metadata = f"{result.dist}-{result.downstream_version}.dist-info/METADATA"
     upstream_record = f"{result.dist}-{result.upstream_version}.dist-info/RECORD"
+    upstream_wheel_path = f"{result.dist}-{result.upstream_version}.dist-info/WHEEL"
 
     # Find METADATA in `different` (same-version case)
     metadata_diffs = [diff for diff in result.different if diff.filename == upstream_metadata]
@@ -578,7 +625,7 @@ async def async_compare_local_wheel(
         and any(e.filename == downstream_metadata for e in result.only_downstream)
     )
 
-    # Pre-fetch upstream METADATA and RECORD files in parallel
+    # Pre-fetch upstream METADATA, RECORD, and WHEEL files in parallel
     reads: list[collections.abc.Coroutine[Any, Any, bytes]] = []
     read_keys: list[str] = []
     for diff in metadata_diffs:
@@ -593,10 +640,15 @@ async def async_compare_local_wheel(
         reads.append(upstream.read(upstream_record))
         read_keys.append(upstream_record)
 
+    if upstream_wheel_path in upstream_infos:
+        reads.append(upstream.read(upstream_wheel_path))
+        read_keys.append(upstream_wheel_path)
+
     fetched = await asyncio.gather(*reads) if reads else []
     upstream_data = dict(zip(read_keys, fetched, strict=True))
 
     down_record_path = f"{result.dist}-{result.downstream_version}.dist-info/RECORD"
+    down_wheel_path = f"{result.dist}-{result.downstream_version}.dist-info/WHEEL"
     with zipfile.ZipFile(downstream_path) as ds_zf:
         result = _check_metadata(result, upstream_data.__getitem__, ds_zf.read)
         result = check_records(
@@ -605,6 +657,13 @@ async def async_compare_local_wheel(
             downstream_infos=downstream_infos,
             upstream_record=upstream_data.get(upstream_record),
             downstream_record=_read_record(downstream_infos, ds_zf.read, down_record_path),
+        )
+        result = check_platform_abi(
+            result,
+            upstream_infos=upstream_infos,
+            downstream_infos=downstream_infos,
+            upstream_wheel=upstream_data.get(upstream_wheel_path),
+            downstream_wheel=_read_record(downstream_infos, ds_zf.read, down_wheel_path),
         )
     return result
 

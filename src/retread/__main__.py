@@ -68,6 +68,10 @@ def _print_comparison(result: WheelComparison) -> None:
             print(f"\nRECORD mismatches ({len(result.record_mismatches)}):")
             for w in result.record_mismatches:
                 print(f"  [{w.side}] {w.message}")
+        if result.platform_warnings:
+            print(f"\nPlatform warnings ({len(result.platform_warnings)}):")
+            for w in result.platform_warnings:
+                print(f"  [{w.side}] {w.message}")
         return
 
     # Collect items grouped by severity, then by type.
@@ -100,6 +104,11 @@ def _print_comparison(result: WheelComparison) -> None:
     if result.record_mismatches:
         print(f"\nRECORD mismatches ({len(result.record_mismatches)}):")
         for w in result.record_mismatches:
+            print(f"  [{w.side}] {w.message}")
+
+    if result.platform_warnings:
+        print(f"\nPlatform warnings ({len(result.platform_warnings)}):")
+        for w in result.platform_warnings:
             print(f"  [{w.side}] {w.message}")
 
     if result.has_errors:
@@ -146,6 +155,9 @@ def _print_json(result: WheelComparison) -> None:
         "identical": list(result.identical),
         "record_mismatches": [
             {"side": w.side, "message": w.message} for w in result.record_mismatches
+        ],
+        "platform_warnings": [
+            {"side": w.side, "message": w.message} for w in result.platform_warnings
         ],
     }
     json.dump(data, sys.stdout, indent=2)

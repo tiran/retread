@@ -98,6 +98,19 @@ def make_wheel(path, files: dict[str, str]) -> None:
             zf.writestr(name, content)
 
 
+def make_wheel_file(root_is_purelib: bool, tags: list[str]) -> bytes:
+    """Build a minimal WHEEL file as bytes."""
+    purelib = "true" if root_is_purelib else "false"
+    lines = [
+        "Wheel-Version: 1.0",
+        "Generator: test",
+        f"Root-Is-Purelib: {purelib}",
+    ]
+    for tag in tags:
+        lines.append(f"Tag: {tag}")
+    return "\n".join(lines).encode()
+
+
 # --- Reusable fixtures ---
 
 UPSTREAM_URL = "https://pypi.org/foo-1.0-py3-none-any.whl"
