@@ -15,15 +15,18 @@ import pypi_simple
 
 from retread._compare import (
     WheelComparison,
-    _is_url,
-    _wheel_basename,
     async_compare_local_wheel,
     async_compare_wheels,
     compare_local_wheel,
     compare_wheels,
 )
 from retread._errors import ComparisonError, RetreadError
-from retread._resolve import find_matching_wheel, parse_wheel_spec
+from retread._resolve import (
+    _is_url,
+    _wheel_basename,
+    find_matching_wheel,
+    parse_wheel_spec,
+)
 
 if typing.TYPE_CHECKING:
     from retread._types import AsyncBackend, SyncBackend

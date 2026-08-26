@@ -166,6 +166,22 @@ stable ABI (`.abi3t.so`) require:
 - At least one filename tag with `abi3` as the ABI component.
 - A CPython interpreter (`cp3*`) in the filename tags.
 
+### Version normalization
+
+The version in the wheel filename must be PEP 440 normalized
+(`str(Version(v)) == v`).  Path construction for dist-info and data
+directories assumes normalized versions; a non-normalized version
+would produce wrong lookup paths.  A warning is raised when the raw
+filename version differs from its normalized form (e.g. `1.0.0`
+vs `1.0`).
+
+### METADATA version consistency
+
+The `Version` field in the wheel's `METADATA` file must match the
+normalized version from the wheel filename.  A mismatch indicates the
+wheel was built or repacked incorrectly.  This check is skipped when
+METADATA is not available.
+
 ### Data scripts heuristic
 
 If `{dist}-{version}.data/scripts/` contains files larger than 8 KiB

@@ -14,7 +14,7 @@ from retread._platform import (
     check_platform_abi,
 )
 
-from .conftest import FakeInfo, make_wheel_file
+from .conftest import FakeInfo, make_metadata, make_wheel_file
 
 # --- _parse_wheel_tags ---
 
@@ -296,6 +296,100 @@ def test_no_wheel_file():
     # Should warn about platform 'any' but not about Root-Is-Purelib
     assert any("platform tag 'any'" in w.message for w in warnings)
     assert not any("Root-Is-Purelib" in w.message for w in warnings)
+
+
+# --- version validation ---
+
+
+def test_normalized_version_no_warning():
+    """Normalized version in filename produces no version warning."""
+    infos = {"foo/__init__.py": FakeInfo("foo/__init__.py")}
+    wheel_bytes = make_wheel_file(True, ["py3-none-any"])
+    warnings = _check_single_wheel(
+        "upstream",
+        infos,
+        wheel_bytes,
+        _PURE_TAGS,
+        "foo",
+        "1.0",
+        wheel_filename="foo-1.0-py3-none-any.whl",
+    )
+    assert not any("not normalized" in w.message for w in warnings)
+
+
+def test_non_normalized_version_warning():
+    """Non-normalized version in filename produces a warning."""
+    infos = {"foo/__init__.py": FakeInfo("foo/__init__.py")}
+    wheel_bytes = make_wheel_file(True, ["py3-none-any"])
+    warnings = _check_single_wheel(
+        "upstream",
+        infos,
+        wheel_bytes,
+        _PURE_TAGS,
+        "foo",
+        "1.01.0",
+        wheel_filename="foo-1.01.0-py3-none-any.whl",
+    )
+    ver_warns = [w for w in warnings if "not normalized" in w.message]
+    assert len(ver_warns) == 1
+    assert "'1.01.0'" in ver_warns[0].message
+    assert "'1.1.0'" in ver_warns[0].message
+
+
+def test_metadata_version_matches_no_warning():
+    """METADATA Version matching filename version produces no warning."""
+    infos = {"foo/__init__.py": FakeInfo("foo/__init__.py")}
+    wheel_bytes = make_wheel_file(True, ["py3-none-any"])
+    metadata = make_metadata("foo", "1.0")
+    warnings = _check_single_wheel(
+        "upstream",
+        infos,
+        wheel_bytes,
+        _PURE_TAGS,
+        "foo",
+        "1.0",
+        metadata_bytes=metadata,
+        wheel_filename="foo-1.0-py3-none-any.whl",
+    )
+    assert not any("METADATA Version" in w.message for w in warnings)
+
+
+def test_metadata_version_differs_warning():
+    """METADATA Version differing from filename version produces a warning."""
+    infos = {"foo/__init__.py": FakeInfo("foo/__init__.py")}
+    wheel_bytes = make_wheel_file(True, ["py3-none-any"])
+    metadata = make_metadata("foo", "2.0")
+    warnings = _check_single_wheel(
+        "upstream",
+        infos,
+        wheel_bytes,
+        _PURE_TAGS,
+        "foo",
+        "1.0",
+        metadata_bytes=metadata,
+        wheel_filename="foo-1.0-py3-none-any.whl",
+    )
+    meta_warns = [w for w in warnings if "METADATA Version" in w.message]
+    assert len(meta_warns) == 1
+    assert "'2.0'" in meta_warns[0].message
+    assert "'1.0'" in meta_warns[0].message
+
+
+def test_missing_metadata_no_crash():
+    """Missing METADATA bytes does not crash version check."""
+    infos = {"foo/__init__.py": FakeInfo("foo/__init__.py")}
+    wheel_bytes = make_wheel_file(True, ["py3-none-any"])
+    warnings = _check_single_wheel(
+        "upstream",
+        infos,
+        wheel_bytes,
+        _PURE_TAGS,
+        "foo",
+        "1.0",
+        metadata_bytes=None,
+        wheel_filename="foo-1.0-py3-none-any.whl",
+    )
+    assert not any("METADATA Version" in w.message for w in warnings)
 
 
 # --- check_platform_abi ---

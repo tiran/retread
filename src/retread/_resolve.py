@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import pathlib
 import re
 import typing
 
@@ -144,6 +145,42 @@ def parse_wheel_spec(filename: str) -> WheelSpec:
         build=build,
         tags=tags,
     )
+
+
+def _is_url(value: str) -> bool:
+    """Check if a string looks like a URL."""
+    return value.startswith(("http://", "https://"))
+
+
+def _wheel_basename(source: str | pathlib.Path) -> str:
+    """Extract wheel filename from a URL, path, or bare filename."""
+    s = str(source)
+    if _is_url(s):
+        # Strip query/fragment, take basename
+        path_part = s.split("?", 1)[0].split("#", 1)[0]
+        return path_part.rsplit("/", 1)[-1]
+    return pathlib.PurePosixPath(s).name
+
+
+def _parse_name_version(wheel_filename: str) -> tuple[str, str]:
+    """Extract distribution name and version from a wheel filename.
+
+    Both values are taken verbatim — no normalisation is applied — so
+    they match the directory names inside the wheel
+    (``{name}-{version}.dist-info/``, ``{name}-{version}.data/``).
+    """
+    if not wheel_filename.endswith(".whl"):
+        raise InvalidWheelError(wheel_filename)
+    parts = wheel_filename.removesuffix(".whl").split("-")
+    # name-version-pytag-abitag-plattag (5 min), or with build tag (6)
+    if len(parts) < 4:
+        raise InvalidWheelError(wheel_filename)
+    return parts[0], parts[1]
+
+
+def _extract_raw_version(wheel_filename: str) -> str:
+    """Extract the raw version string from a wheel filename."""
+    return wheel_filename.removesuffix(".whl").split("-")[1]
 
 
 def find_matching_wheel(

@@ -13,7 +13,6 @@ import dataclasses
 import email.parser
 import enum
 import logging
-import pathlib
 import re
 import typing
 import zipfile
@@ -24,9 +23,11 @@ from packaging.version import Version
 from retread._errors import InvalidWheelError
 from retread._platform import PlatformWarning, check_platform_abi
 from retread._record import RecordMismatch, check_records
+from retread._resolve import _parse_name_version, _wheel_basename
 
 if typing.TYPE_CHECKING:
     import collections.abc
+    import pathlib
 
     from zipwire import AsyncRemoteZip, SyncRemoteZip
 
@@ -53,7 +54,6 @@ class Classification(enum.Enum):
     OTHER = "other"
 
 
-_WHEEL_NAME_RE = re.compile(r"^(?P<name>.+?)-(?P<version>.+?)(-\d[^-]*)?-[^-]+-[^-]+-[^-]+\.whl$")
 _SHARED_LIB_RE = re.compile(r"\.so(\.[0-9.]+)?$")
 
 
@@ -76,19 +76,6 @@ def _is_auditwheel_lib(filename: str) -> bool:
     """
     parts = filename.split("/")
     return any(part.endswith(".libs") for part in parts)
-
-
-def _parse_name_version(wheel_filename: str) -> tuple[str, str]:
-    """Extract distribution name and version from a wheel filename.
-
-    Both values are taken verbatim — no normalisation is applied — so
-    they match the directory names inside the wheel
-    (``{name}-{version}.dist-info/``, ``{name}-{version}.data/``).
-    """
-    m = _WHEEL_NAME_RE.match(wheel_filename)
-    if m is None:
-        raise InvalidWheelError(wheel_filename)
-    return m.group("name"), m.group("version")
 
 
 def _classify_file(
@@ -253,6 +240,8 @@ def compare_wheels(
     result = _check_metadata(result, upstream.read, downstream.read)
     up_record_path = f"{result.dist}-{result.upstream_version}.dist-info/RECORD"
     down_record_path = f"{result.dist}-{result.downstream_version}.dist-info/RECORD"
+    up_metadata_path = f"{result.dist}-{result.upstream_version}.dist-info/METADATA"
+    down_metadata_path = f"{result.dist}-{result.downstream_version}.dist-info/METADATA"
     result = check_records(
         result,
         upstream_infos=upstream_infos,
@@ -268,6 +257,8 @@ def compare_wheels(
         downstream_infos=downstream_infos,
         upstream_wheel=_read_record(upstream_infos, upstream.read, up_wheel_path),
         downstream_wheel=_read_record(downstream_infos, downstream.read, down_wheel_path),
+        upstream_metadata=_read_record(upstream_infos, upstream.read, up_metadata_path),
+        downstream_metadata=_read_record(downstream_infos, downstream.read, down_metadata_path),
     )
     return result
 
@@ -336,6 +327,17 @@ async def async_compare_wheels(
             reads.append(rz.read(wheel_path))
             wheel_keys.append(wheel_path)
 
+    # Pre-fetch METADATA for platform version checks (avoid duplicates)
+    queued = {fname for _, fname in metadata_keys}
+    platform_metadata_keys: list[str] = []
+    for meta_path, infos, rz in [
+        (upstream_metadata, upstream_infos, upstream),
+        (downstream_metadata, downstream_infos, downstream),
+    ]:
+        if meta_path in infos and meta_path not in queued:
+            reads.append(rz.read(meta_path))
+            platform_metadata_keys.append(meta_path)
+
     fetched = await asyncio.gather(*reads) if reads else []
 
     # Unpack metadata reads
@@ -374,12 +376,26 @@ async def async_compare_wheels(
     for idx, fname in enumerate(wheel_keys):
         wheel_data[fname] = fetched[offset + idx]
 
+    # Unpack platform metadata reads
+    platform_meta_data: dict[str, bytes] = {}
+    offset = len(metadata_keys) + len(record_keys) + len(wheel_keys)
+    for idx, fname in enumerate(platform_metadata_keys):
+        platform_meta_data[fname] = fetched[offset + idx]
+    # Merge already-fetched metadata
+    all_meta = {**platform_meta_data}
+    for fname, data in upstream_meta.items():
+        all_meta.setdefault(fname, data)
+    for fname, data in downstream_meta.items():
+        all_meta.setdefault(fname, data)
+
     result = check_platform_abi(
         result,
         upstream_infos=upstream_infos,
         downstream_infos=downstream_infos,
         upstream_wheel=wheel_data.get(upstream_wheel_path),
         downstream_wheel=wheel_data.get(downstream_wheel_path),
+        upstream_metadata=all_meta.get(upstream_metadata),
+        downstream_metadata=all_meta.get(downstream_metadata),
     )
     return result
 
@@ -578,6 +594,8 @@ def compare_local_wheel(
     down_record_path = f"{result.dist}-{result.downstream_version}.dist-info/RECORD"
     up_wheel_path = f"{result.dist}-{result.upstream_version}.dist-info/WHEEL"
     down_wheel_path = f"{result.dist}-{result.downstream_version}.dist-info/WHEEL"
+    up_metadata_path = f"{result.dist}-{result.upstream_version}.dist-info/METADATA"
+    down_metadata_path = f"{result.dist}-{result.downstream_version}.dist-info/METADATA"
     with zipfile.ZipFile(downstream_path) as ds_zf:
         result = _check_metadata(result, upstream.read, ds_zf.read)
         result = check_records(
@@ -593,6 +611,8 @@ def compare_local_wheel(
             downstream_infos=downstream_infos,
             upstream_wheel=_read_record(upstream_infos, upstream.read, up_wheel_path),
             downstream_wheel=_read_record(downstream_infos, ds_zf.read, down_wheel_path),
+            upstream_metadata=_read_record(upstream_infos, upstream.read, up_metadata_path),
+            downstream_metadata=_read_record(downstream_infos, ds_zf.read, down_metadata_path),
         )
     return result
 
@@ -644,11 +664,17 @@ async def async_compare_local_wheel(
         reads.append(upstream.read(upstream_wheel_path))
         read_keys.append(upstream_wheel_path)
 
+    # Pre-fetch upstream METADATA for platform version check (if not already queued)
+    if upstream_metadata in upstream_infos and upstream_metadata not in read_keys:
+        reads.append(upstream.read(upstream_metadata))
+        read_keys.append(upstream_metadata)
+
     fetched = await asyncio.gather(*reads) if reads else []
     upstream_data = dict(zip(read_keys, fetched, strict=True))
 
     down_record_path = f"{result.dist}-{result.downstream_version}.dist-info/RECORD"
     down_wheel_path = f"{result.dist}-{result.downstream_version}.dist-info/WHEEL"
+    down_metadata_path = f"{result.dist}-{result.downstream_version}.dist-info/METADATA"
     with zipfile.ZipFile(downstream_path) as ds_zf:
         result = _check_metadata(result, upstream_data.__getitem__, ds_zf.read)
         result = check_records(
@@ -664,20 +690,7 @@ async def async_compare_local_wheel(
             downstream_infos=downstream_infos,
             upstream_wheel=upstream_data.get(upstream_wheel_path),
             downstream_wheel=_read_record(downstream_infos, ds_zf.read, down_wheel_path),
+            upstream_metadata=upstream_data.get(upstream_metadata),
+            downstream_metadata=_read_record(downstream_infos, ds_zf.read, down_metadata_path),
         )
     return result
-
-
-def _is_url(value: str) -> bool:
-    """Check if a string looks like a URL."""
-    return value.startswith(("http://", "https://"))
-
-
-def _wheel_basename(source: str | pathlib.Path) -> str:
-    """Extract wheel filename from a URL, path, or bare filename."""
-    s = str(source)
-    if _is_url(s):
-        # Strip query/fragment, take basename
-        path_part = s.split("?", 1)[0].split("#", 1)[0]
-        return path_part.rsplit("/", 1)[-1]
-    return pathlib.PurePosixPath(s).name
