@@ -58,6 +58,7 @@ class Classification(enum.Enum):
     STATIC_LIBRARY = "static library"
     VERSION_FILE = "version file"
     NAMESPACE_PKG_PTH = "namespace pkg pth"
+    TEST = "test"
     OTHER = "other"
 
 
@@ -92,6 +93,15 @@ _VERSION_BASENAMES = frozenset(
 def _is_version_file(filename: str) -> bool:
     """Return True if *filename* is an auto-generated version file."""
     return posixpath.basename(filename) in _VERSION_BASENAMES
+
+
+def _is_test_file(filename: str) -> bool:
+    """Return True if *filename* is inside a test directory.
+
+    Matches ``test/`` and ``tests/`` path components at any depth.
+    """
+    parts = filename.split("/")
+    return any(part in ("test", "tests") for part in parts)
 
 
 def _is_auditwheel_lib(filename: str) -> bool:
@@ -190,6 +200,10 @@ def _classify_file(
     # auditwheel-bundled shared libraries (*.libs/)
     if _is_auditwheel_lib(filename):
         return Severity.NOTICE, Classification.AUDITWHEEL
+    # Test directories (test/ or tests/): differences and missing files
+    # inside test suites are not meaningful for rebuild comparison.
+    if _is_test_file(filename):
+        return Severity.NOTICE, Classification.TEST
     # Shared library binaries (.so) not in *.libs/
     if _is_shared_library(filename):
         if missing:

@@ -33,14 +33,6 @@
   platform/ABI tags). Currently all three cases raise the same
   `WheelNotFoundError`.
 
-## Ignore test directories
-
-- Ignore changes and missing files inside `test/` and `tests/`
-  subdirectories.  Some upstream wheels ship test suites that
-  downstream rebuilds may modify or omit.  These differences are not
-  meaningful for the rebuild comparison and should be classified as
-  NOTICE rather than ERROR.
-
 ## Per-package policy configuration
 
 - Support external configuration files that define per-package
