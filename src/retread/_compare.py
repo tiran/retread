@@ -10,14 +10,17 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-import email.parser
 import enum
 import logging
+import posixpath
 import re
 import typing
 import zipfile
 from typing import Any
 
+import packaging.utils
+from packaging.metadata import parse_email
+from packaging.requirements import Requirement
 from packaging.version import Version
 
 from retread._errors import InvalidWheelError
@@ -51,10 +54,13 @@ class Classification(enum.Enum):
     DATA = "data"
     DATA_SCRIPTS = "data scripts"
     EXTENSION_MODULE = "extension module"
+    STATIC_LIBRARY = "static library"
+    VERSION_FILE = "version file"
     OTHER = "other"
 
 
 _SHARED_LIB_RE = re.compile(r"\.so(\.[0-9.]+)?$")
+_STATIC_LIB_RE = re.compile(r"/lib[^/]+\.a$")
 
 
 def _is_shared_library(filename: str) -> bool:
@@ -64,6 +70,26 @@ def _is_shared_library(filename: str) -> bool:
     (``libfoo.so.1.2.3``) shared-object names.
     """
     return _SHARED_LIB_RE.search(filename) is not None
+
+
+def _is_static_library(filename: str) -> bool:
+    """Return True if *filename* looks like a static archive (``lib*.a``)."""
+    return _STATIC_LIB_RE.search(filename) is not None
+
+
+_VERSION_BASENAMES = frozenset(
+    {
+        "_version.py",
+        "__version__.py",
+        "version.py",
+        "__config__.py",
+    }
+)
+
+
+def _is_version_file(filename: str) -> bool:
+    """Return True if *filename* is an auto-generated version file."""
+    return posixpath.basename(filename) in _VERSION_BASENAMES
 
 
 def _is_auditwheel_lib(filename: str) -> bool:
@@ -131,6 +157,13 @@ def _classify_file(
             return Severity.ERROR, Classification.EXTENSION_MODULE
         # Binary difference in an .so present on both sides is expected
         return Severity.EXPECTED, Classification.EXTENSION_MODULE
+    # Static archive libraries (lib*.a)
+    if _is_static_library(filename):
+        if missing:
+            return Severity.ERROR, Classification.STATIC_LIBRARY
+        return Severity.EXPECTED, Classification.STATIC_LIBRARY
+    if _is_version_file(filename):
+        return Severity.NOTICE, Classification.VERSION_FILE
     return Severity.ERROR, Classification.OTHER
 
 
@@ -189,6 +222,14 @@ class WheelComparison:
     identical: tuple[str, ...]
     record_mismatches: tuple[RecordMismatch, ...] = ()
     platform_warnings: tuple[PlatformWarning, ...] = ()
+    upstream_dist: str = ""
+    downstream_dist: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.upstream_dist:
+            object.__setattr__(self, "upstream_dist", self.dist)
+        if not self.downstream_dist:
+            object.__setattr__(self, "downstream_dist", self.dist)
 
     @property
     def is_identical(self) -> bool:
@@ -238,27 +279,23 @@ def compare_wheels(
         downstream_infos=downstream_infos,
     )
     result = _check_metadata(result, upstream.read, downstream.read)
-    up_record_path = f"{result.dist}-{result.upstream_version}.dist-info/RECORD"
-    down_record_path = f"{result.dist}-{result.downstream_version}.dist-info/RECORD"
-    up_metadata_path = f"{result.dist}-{result.upstream_version}.dist-info/METADATA"
-    down_metadata_path = f"{result.dist}-{result.downstream_version}.dist-info/METADATA"
+    up_di = f"{result.upstream_dist}-{result.upstream_version}.dist-info"
+    down_di = f"{result.downstream_dist}-{result.downstream_version}.dist-info"
     result = check_records(
         result,
         upstream_infos=upstream_infos,
         downstream_infos=downstream_infos,
-        upstream_record=_read_record(upstream_infos, upstream.read, up_record_path),
-        downstream_record=_read_record(downstream_infos, downstream.read, down_record_path),
+        upstream_record=_read_record(upstream_infos, upstream.read, f"{up_di}/RECORD"),
+        downstream_record=_read_record(downstream_infos, downstream.read, f"{down_di}/RECORD"),
     )
-    up_wheel_path = f"{result.dist}-{result.upstream_version}.dist-info/WHEEL"
-    down_wheel_path = f"{result.dist}-{result.downstream_version}.dist-info/WHEEL"
     result = check_platform_abi(
         result,
         upstream_infos=upstream_infos,
         downstream_infos=downstream_infos,
-        upstream_wheel=_read_record(upstream_infos, upstream.read, up_wheel_path),
-        downstream_wheel=_read_record(downstream_infos, downstream.read, down_wheel_path),
-        upstream_metadata=_read_record(upstream_infos, upstream.read, up_metadata_path),
-        downstream_metadata=_read_record(downstream_infos, downstream.read, down_metadata_path),
+        upstream_wheel=_read_record(upstream_infos, upstream.read, f"{up_di}/WHEEL"),
+        downstream_wheel=_read_record(downstream_infos, downstream.read, f"{down_di}/WHEEL"),
+        upstream_metadata=_read_record(upstream_infos, upstream.read, f"{up_di}/METADATA"),
+        downstream_metadata=_read_record(downstream_infos, downstream.read, f"{down_di}/METADATA"),
     )
     return result
 
@@ -277,12 +314,14 @@ async def async_compare_wheels(
         downstream_infos=downstream_infos,
     )
 
-    upstream_metadata = f"{result.dist}-{result.upstream_version}.dist-info/METADATA"
-    downstream_metadata = f"{result.dist}-{result.downstream_version}.dist-info/METADATA"
-    upstream_record = f"{result.dist}-{result.upstream_version}.dist-info/RECORD"
-    downstream_record = f"{result.dist}-{result.downstream_version}.dist-info/RECORD"
-    upstream_wheel_path = f"{result.dist}-{result.upstream_version}.dist-info/WHEEL"
-    downstream_wheel_path = f"{result.dist}-{result.downstream_version}.dist-info/WHEEL"
+    up_di = f"{result.upstream_dist}-{result.upstream_version}.dist-info"
+    down_di = f"{result.downstream_dist}-{result.downstream_version}.dist-info"
+    upstream_metadata = f"{up_di}/METADATA"
+    downstream_metadata = f"{down_di}/METADATA"
+    upstream_record = f"{up_di}/RECORD"
+    downstream_record = f"{down_di}/RECORD"
+    upstream_wheel_path = f"{up_di}/WHEEL"
+    downstream_wheel_path = f"{down_di}/WHEEL"
 
     # Find METADATA in `different` (same-version case)
     metadata_diffs = [diff for diff in result.different if diff.filename == upstream_metadata]
@@ -309,34 +348,34 @@ async def async_compare_wheels(
         reads.append(downstream.read(downstream_metadata))
         metadata_keys.append(("downstream", downstream_metadata))
 
-    record_keys: list[str] = []
-    for record_path, infos, rz in [
-        (upstream_record, upstream_infos, upstream),
-        (downstream_record, downstream_infos, downstream),
+    # Track all remaining reads as (side, filename) so that entries
+    # with the same filename on both sides don't collide in a dict.
+    extra_keys: list[tuple[str, str]] = []
+    for side_name, record_path, infos, rz in [
+        ("upstream", upstream_record, upstream_infos, upstream),
+        ("downstream", downstream_record, downstream_infos, downstream),
     ]:
         if record_path in infos:
             reads.append(rz.read(record_path))
-            record_keys.append(record_path)
+            extra_keys.append((side_name, record_path))
 
-    wheel_keys: list[str] = []
-    for wheel_path, infos, rz in [
-        (upstream_wheel_path, upstream_infos, upstream),
-        (downstream_wheel_path, downstream_infos, downstream),
+    for side_name, wheel_path, infos, rz in [
+        ("upstream", upstream_wheel_path, upstream_infos, upstream),
+        ("downstream", downstream_wheel_path, downstream_infos, downstream),
     ]:
         if wheel_path in infos:
             reads.append(rz.read(wheel_path))
-            wheel_keys.append(wheel_path)
+            extra_keys.append((side_name, wheel_path))
 
     # Pre-fetch METADATA for platform version checks (avoid duplicates)
     queued = {fname for _, fname in metadata_keys}
-    platform_metadata_keys: list[str] = []
-    for meta_path, infos, rz in [
-        (upstream_metadata, upstream_infos, upstream),
-        (downstream_metadata, downstream_infos, downstream),
+    for side_name, meta_path, infos, rz in [
+        ("upstream", upstream_metadata, upstream_infos, upstream),
+        ("downstream", downstream_metadata, downstream_infos, downstream),
     ]:
         if meta_path in infos and meta_path not in queued:
             reads.append(rz.read(meta_path))
-            platform_metadata_keys.append(meta_path)
+            extra_keys.append((side_name, meta_path))
 
     fetched = await asyncio.gather(*reads) if reads else []
 
@@ -356,46 +395,38 @@ async def async_compare_wheels(
             downstream_meta.__getitem__,
         )
 
-    # Unpack record reads
-    record_data: dict[str, bytes] = {}
+    # Unpack record, wheel, and platform metadata reads into per-side dicts
+    upstream_extra: dict[str, bytes] = {}
+    downstream_extra: dict[str, bytes] = {}
     offset = len(metadata_keys)
-    for idx, fname in enumerate(record_keys):
-        record_data[fname] = fetched[offset + idx]
+    for idx, (side, fname) in enumerate(extra_keys):
+        if side == "upstream":
+            upstream_extra[fname] = fetched[offset + idx]
+        else:
+            downstream_extra[fname] = fetched[offset + idx]
 
     result = check_records(
         result,
         upstream_infos=upstream_infos,
         downstream_infos=downstream_infos,
-        upstream_record=record_data.get(upstream_record),
-        downstream_record=record_data.get(downstream_record),
+        upstream_record=upstream_extra.get(upstream_record),
+        downstream_record=downstream_extra.get(downstream_record),
     )
 
-    # Unpack wheel reads
-    wheel_data: dict[str, bytes] = {}
-    offset = len(metadata_keys) + len(record_keys)
-    for idx, fname in enumerate(wheel_keys):
-        wheel_data[fname] = fetched[offset + idx]
-
-    # Unpack platform metadata reads
-    platform_meta_data: dict[str, bytes] = {}
-    offset = len(metadata_keys) + len(record_keys) + len(wheel_keys)
-    for idx, fname in enumerate(platform_metadata_keys):
-        platform_meta_data[fname] = fetched[offset + idx]
-    # Merge already-fetched metadata
-    all_meta = {**platform_meta_data}
+    # Merge already-fetched metadata into per-side extras
     for fname, data in upstream_meta.items():
-        all_meta.setdefault(fname, data)
+        upstream_extra.setdefault(fname, data)
     for fname, data in downstream_meta.items():
-        all_meta.setdefault(fname, data)
+        downstream_extra.setdefault(fname, data)
 
     result = check_platform_abi(
         result,
         upstream_infos=upstream_infos,
         downstream_infos=downstream_infos,
-        upstream_wheel=wheel_data.get(upstream_wheel_path),
-        downstream_wheel=wheel_data.get(downstream_wheel_path),
-        upstream_metadata=all_meta.get(upstream_metadata),
-        downstream_metadata=all_meta.get(downstream_metadata),
+        upstream_wheel=upstream_extra.get(upstream_wheel_path),
+        downstream_wheel=downstream_extra.get(downstream_wheel_path),
+        upstream_metadata=upstream_extra.get(upstream_metadata),
+        downstream_metadata=downstream_extra.get(downstream_metadata),
     )
     return result
 
@@ -408,11 +439,12 @@ def _compare(
 ) -> WheelComparison:
     upstream_whl = _wheel_basename(upstream)
     downstream_whl = _wheel_basename(downstream)
-    dist, upstream_ver_str = _parse_name_version(upstream_whl)
-    downstream_dist, downstream_ver_str = _parse_name_version(downstream_whl)
-    if dist != downstream_dist:
+    up_dist, upstream_ver_str = _parse_name_version(upstream_whl)
+    down_dist, downstream_ver_str = _parse_name_version(downstream_whl)
+    canonical = packaging.utils.canonicalize_name(up_dist)
+    if canonical != packaging.utils.canonicalize_name(down_dist):
         raise InvalidWheelError(
-            f"dist name mismatch: upstream {dist!r} != downstream {downstream_dist!r}"
+            f"dist name mismatch: upstream {up_dist!r} != downstream {down_dist!r}"
         )
     upstream_names = set(upstream_infos)
     downstream_names = set(downstream_infos)
@@ -428,7 +460,9 @@ def _compare(
         if u_info.CRC == d_info.CRC and u_info.file_size == d_info.file_size:
             identical.append(fname)
         else:
-            severity, classification = _classify_file(fname, dist=dist, version=upstream_ver_str)
+            severity, classification = _classify_file(
+                fname, dist=up_dist, version=upstream_ver_str
+            )
             different.append(
                 FileDiff(
                     filename=fname,
@@ -443,13 +477,13 @@ def _compare(
 
     def _make_upstream_entry(fname: str) -> FileEntry:
         severity, classification = _classify_file(
-            fname, dist=dist, version=upstream_ver_str, missing=True
+            fname, dist=up_dist, version=upstream_ver_str, missing=True
         )
         return FileEntry(filename=fname, severity=severity, classification=classification)
 
     def _make_downstream_entry(fname: str) -> FileEntry:
         severity, classification = _classify_file(
-            fname, dist=dist, version=downstream_ver_str, missing=True
+            fname, dist=down_dist, version=downstream_ver_str, missing=True
         )
         return FileEntry(filename=fname, severity=severity, classification=classification)
 
@@ -458,7 +492,9 @@ def _compare(
         downstream=downstream,
         upstream_wheel=upstream_whl,
         downstream_wheel=downstream_whl,
-        dist=dist,
+        dist=canonical,
+        upstream_dist=up_dist,
+        downstream_dist=down_dist,
         upstream_version=Version(upstream_ver_str),
         downstream_version=Version(downstream_ver_str),
         only_upstream=tuple(_make_upstream_entry(fname) for fname in only_upstream),
@@ -468,27 +504,45 @@ def _compare(
     )
 
 
+def _normalize_req(raw: str) -> str:
+    """Normalize a Requires-Dist entry for comparison.
+
+    Uses ``Requirement`` to normalize whitespace, quoting, and marker
+    formatting, then canonicalizes the distribution name so that
+    ``typing-extensions`` and ``typing_extensions`` compare equal.
+    """
+    req = Requirement(raw)
+    req.name = packaging.utils.canonicalize_name(req.name)
+    return str(req)
+
+
 def _metadata_core_match(upstream_bytes: bytes, downstream_bytes: bytes) -> bool:
     """Check whether core metadata fields match between two METADATA files.
 
     Compares Name, Version (single-value) and Requires-Dist,
-    Provides-Extra (multi-value, compared as sorted lists).
+    Provides-Extra (multi-value, compared as sets with normalization).
+    Name is canonicalized per PEP 503.  Requires-Dist entries are
+    normalized via :func:`_normalize_req` so that cosmetic differences
+    (whitespace, quoting, name spelling, order) are ignored.
     """
-    parser = email.parser.BytesParser()
-    upstream_meta = parser.parsebytes(upstream_bytes)
-    downstream_meta = parser.parsebytes(downstream_bytes)
+    upstream_meta, _ = parse_email(upstream_bytes)
+    downstream_meta, _ = parse_email(downstream_bytes)
 
-    for key in ("Name", "Version"):
-        if upstream_meta.get(key) != downstream_meta.get(key):
-            return False
+    up_name = packaging.utils.canonicalize_name(upstream_meta["name"])
+    down_name = packaging.utils.canonicalize_name(downstream_meta["name"])
+    if up_name != down_name:
+        return False
+    if upstream_meta["version"] != downstream_meta["version"]:
+        return False
 
-    for key in ("Requires-Dist", "Provides-Extra"):
-        upstream_values = sorted(upstream_meta.get_all(key) or [])
-        downstream_values = sorted(downstream_meta.get_all(key) or [])
-        if upstream_values != downstream_values:
-            return False
+    up_extras = set(upstream_meta.get("provides_extra") or [])
+    down_extras = set(downstream_meta.get("provides_extra") or [])
+    if up_extras != down_extras:
+        return False
 
-    return True
+    up_reqs = {_normalize_req(r) for r in upstream_meta.get("requires_dist") or []}
+    down_reqs = {_normalize_req(r) for r in downstream_meta.get("requires_dist") or []}
+    return up_reqs == down_reqs
 
 
 def _check_metadata(
@@ -507,8 +561,10 @@ def _check_metadata(
       *only_upstream* / *only_downstream*.  Core fields are still
       compared and severities updated accordingly.
     """
-    upstream_metadata = f"{result.dist}-{result.upstream_version}.dist-info/METADATA"
-    downstream_metadata = f"{result.dist}-{result.downstream_version}.dist-info/METADATA"
+    up_di = f"{result.upstream_dist}-{result.upstream_version}.dist-info"
+    down_di = f"{result.downstream_dist}-{result.downstream_version}.dist-info"
+    upstream_metadata = f"{up_di}/METADATA"
+    downstream_metadata = f"{down_di}/METADATA"
 
     if upstream_metadata == downstream_metadata:
         # Same dist-info prefix: METADATA appears in `different`
@@ -590,29 +646,25 @@ def compare_local_wheel(
         upstream_infos=upstream_infos,
         downstream_infos=downstream_infos,
     )
-    up_record_path = f"{result.dist}-{result.upstream_version}.dist-info/RECORD"
-    down_record_path = f"{result.dist}-{result.downstream_version}.dist-info/RECORD"
-    up_wheel_path = f"{result.dist}-{result.upstream_version}.dist-info/WHEEL"
-    down_wheel_path = f"{result.dist}-{result.downstream_version}.dist-info/WHEEL"
-    up_metadata_path = f"{result.dist}-{result.upstream_version}.dist-info/METADATA"
-    down_metadata_path = f"{result.dist}-{result.downstream_version}.dist-info/METADATA"
+    up_di = f"{result.upstream_dist}-{result.upstream_version}.dist-info"
+    down_di = f"{result.downstream_dist}-{result.downstream_version}.dist-info"
     with zipfile.ZipFile(downstream_path) as ds_zf:
         result = _check_metadata(result, upstream.read, ds_zf.read)
         result = check_records(
             result,
             upstream_infos=upstream_infos,
             downstream_infos=downstream_infos,
-            upstream_record=_read_record(upstream_infos, upstream.read, up_record_path),
-            downstream_record=_read_record(downstream_infos, ds_zf.read, down_record_path),
+            upstream_record=_read_record(upstream_infos, upstream.read, f"{up_di}/RECORD"),
+            downstream_record=_read_record(downstream_infos, ds_zf.read, f"{down_di}/RECORD"),
         )
         result = check_platform_abi(
             result,
             upstream_infos=upstream_infos,
             downstream_infos=downstream_infos,
-            upstream_wheel=_read_record(upstream_infos, upstream.read, up_wheel_path),
-            downstream_wheel=_read_record(downstream_infos, ds_zf.read, down_wheel_path),
-            upstream_metadata=_read_record(upstream_infos, upstream.read, up_metadata_path),
-            downstream_metadata=_read_record(downstream_infos, ds_zf.read, down_metadata_path),
+            upstream_wheel=_read_record(upstream_infos, upstream.read, f"{up_di}/WHEEL"),
+            downstream_wheel=_read_record(downstream_infos, ds_zf.read, f"{down_di}/WHEEL"),
+            upstream_metadata=_read_record(upstream_infos, upstream.read, f"{up_di}/METADATA"),
+            downstream_metadata=_read_record(downstream_infos, ds_zf.read, f"{down_di}/METADATA"),
         )
     return result
 
@@ -630,10 +682,12 @@ async def async_compare_local_wheel(
         upstream_infos=upstream_infos,
         downstream_infos=downstream_infos,
     )
-    upstream_metadata = f"{result.dist}-{result.upstream_version}.dist-info/METADATA"
-    downstream_metadata = f"{result.dist}-{result.downstream_version}.dist-info/METADATA"
-    upstream_record = f"{result.dist}-{result.upstream_version}.dist-info/RECORD"
-    upstream_wheel_path = f"{result.dist}-{result.upstream_version}.dist-info/WHEEL"
+    up_di = f"{result.upstream_dist}-{result.upstream_version}.dist-info"
+    down_di = f"{result.downstream_dist}-{result.downstream_version}.dist-info"
+    upstream_metadata = f"{up_di}/METADATA"
+    downstream_metadata = f"{down_di}/METADATA"
+    upstream_record = f"{up_di}/RECORD"
+    upstream_wheel_path = f"{up_di}/WHEEL"
 
     # Find METADATA in `different` (same-version case)
     metadata_diffs = [diff for diff in result.different if diff.filename == upstream_metadata]
@@ -672,9 +726,6 @@ async def async_compare_local_wheel(
     fetched = await asyncio.gather(*reads) if reads else []
     upstream_data = dict(zip(read_keys, fetched, strict=True))
 
-    down_record_path = f"{result.dist}-{result.downstream_version}.dist-info/RECORD"
-    down_wheel_path = f"{result.dist}-{result.downstream_version}.dist-info/WHEEL"
-    down_metadata_path = f"{result.dist}-{result.downstream_version}.dist-info/METADATA"
     with zipfile.ZipFile(downstream_path) as ds_zf:
         result = _check_metadata(result, upstream_data.__getitem__, ds_zf.read)
         result = check_records(
@@ -682,15 +733,15 @@ async def async_compare_local_wheel(
             upstream_infos=upstream_infos,
             downstream_infos=downstream_infos,
             upstream_record=upstream_data.get(upstream_record),
-            downstream_record=_read_record(downstream_infos, ds_zf.read, down_record_path),
+            downstream_record=_read_record(downstream_infos, ds_zf.read, f"{down_di}/RECORD"),
         )
         result = check_platform_abi(
             result,
             upstream_infos=upstream_infos,
             downstream_infos=downstream_infos,
             upstream_wheel=upstream_data.get(upstream_wheel_path),
-            downstream_wheel=_read_record(downstream_infos, ds_zf.read, down_wheel_path),
+            downstream_wheel=_read_record(downstream_infos, ds_zf.read, f"{down_di}/WHEEL"),
             upstream_metadata=upstream_data.get(upstream_metadata),
-            downstream_metadata=_read_record(downstream_infos, ds_zf.read, down_metadata_path),
+            downstream_metadata=_read_record(downstream_infos, ds_zf.read, f"{down_di}/METADATA"),
         )
     return result

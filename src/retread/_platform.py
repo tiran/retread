@@ -214,8 +214,11 @@ def _check_single_wheel(
                     )
                 )
 
-        # Check 4: abi3/abi3t extensions require abi3 tag and cpython interpreter
-        if has_abi3 or has_abi3t:
+        # Check 4: abi3/abi3t extensions require abi3 tag and cpython interpreter.
+        # Skip when cpython-specific extensions are also present — the
+        # version-specific tags (e.g. cp312-cp312) are correct for those
+        # and the abi3 extensions are compatible with any cpython version.
+        if (has_abi3 or has_abi3t) and not cpython_versions:
             has_abi3_tag = "abi3" in tag_abis
             has_cpython_interp = any(i.startswith("cp3") for i in tag_interpreters)
 
@@ -282,7 +285,6 @@ def check_platform_abi(
     except InvalidWheelFilename:
         downstream_tags = frozenset()
 
-    up_dist = result.dist
     up_version = str(result.upstream_version)
     down_version = str(result.downstream_version)
 
@@ -291,7 +293,7 @@ def check_platform_abi(
         upstream_infos,
         upstream_wheel,
         upstream_tags,
-        up_dist,
+        result.upstream_dist,
         up_version,
         metadata_bytes=upstream_metadata,
         wheel_filename=result.upstream_wheel,
@@ -305,7 +307,7 @@ def check_platform_abi(
         downstream_infos,
         downstream_wheel,
         downstream_tags,
-        up_dist,
+        result.downstream_dist,
         down_version,
         metadata_bytes=downstream_metadata,
         wheel_filename=result.downstream_wheel,

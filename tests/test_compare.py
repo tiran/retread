@@ -171,6 +171,15 @@ ERROR = Severity.ERROR
             ERROR,
             Classification.EXTENSION_MODULE,
         ),
+        # static archives (lib*.a)
+        ("numpy/.dylibs/libopenblas.a", False, EXPECTED, Classification.STATIC_LIBRARY),
+        ("numpy/.dylibs/libopenblas.a", True, ERROR, Classification.STATIC_LIBRARY),
+        # version files (always NOTICE)
+        ("foo/_version.py", False, NOTICE, Classification.VERSION_FILE),
+        ("foo/_version.py", True, NOTICE, Classification.VERSION_FILE),
+        ("foo/version.py", False, NOTICE, Classification.VERSION_FILE),
+        ("foo/sub/__version__.py", False, NOTICE, Classification.VERSION_FILE),
+        ("numpy/__config__.py", False, NOTICE, Classification.VERSION_FILE),
         # other (always ERROR)
         ("foo/data.json", False, ERROR, Classification.OTHER),
         ("foo/data.json", True, ERROR, Classification.OTHER),
@@ -193,6 +202,13 @@ ERROR = Severity.ERROR
         "auditwheel-missing",
         "ext-module-diff",
         "ext-module-missing",
+        "static-lib-diff",
+        "static-lib-missing",
+        "version-file-diff",
+        "version-file-missing",
+        "version-file-alt",
+        "version-file-nested",
+        "version-file-config",
         "other-diff",
         "other-missing",
         "wrong-dist-name",
@@ -223,8 +239,36 @@ def test_classify_file(
         (("foo", "1.0"), ("foo", "2.0"), False),
         # different requires
         (("foo", "1.0", ["bar>=1.0"]), ("foo", "1.0", ["bar>=2.0"]), False),
+        # normalized requires (whitespace)
+        (("foo", "1.0", ["bar >= 1.0"]), ("foo", "1.0", ["bar>=1.0"]), True),
+        # reordered requires
+        (("foo", "1.0", ["a>=1", "b>=2"]), ("foo", "1.0", ["b>=2", "a>=1"]), True),
+        # reordered extras
+        (
+            ("foo", "1.0", ["bar>=1.0"], ["docs", "testing"]),
+            ("foo", "1.0", ["bar>=1.0"], ["testing", "docs"]),
+            True,
+        ),
+        # hyphen vs underscore in dep name (PEP 503 equivalence)
+        (
+            ("foo", "1.0", ["typing-extensions>=3.7"]),
+            ("foo", "1.0", ["typing_extensions>=3.7"]),
+            True,
+        ),
+        # hyphen vs underscore in package Name (PEP 503 equivalence)
+        (("typing-inspect", "0.9.0"), ("typing_inspect", "0.9.0"), True),
     ],
-    ids=["identical", "different-name", "different-version", "different-requires"],
+    ids=[
+        "identical",
+        "different-name",
+        "different-version",
+        "different-requires",
+        "normalized-requires",
+        "reordered-requires",
+        "reordered-extras",
+        "normalized-dep-name",
+        "normalized-pkg-name",
+    ],
 )
 def test_metadata_core_match(up_args: tuple, down_args: tuple, expected: bool) -> None:
     up = make_metadata(*up_args)
@@ -255,6 +299,56 @@ def test_compare_identical() -> None:
     assert not result.only_upstream
     assert not result.only_downstream
     assert not result.different
+
+
+def test_compare_dist_name_normalization() -> None:
+    """Non-normalized upstream dist name should not cause a mismatch."""
+    up_url = "https://pypi.org/InquirerPy-0.3.4-py3-none-any.whl"
+    down_url = "https://rebuild.example.com/inquirerpy-0.3.4-1-py3-none-any.whl"
+    up_info = FakeInfo("InquirerPy/__init__.py", crc=123, file_size=50)
+    down_info = FakeInfo("InquirerPy/__init__.py", crc=123, file_size=50)
+    result = _compare(
+        upstream=up_url,
+        downstream=down_url,
+        upstream_infos={"InquirerPy/__init__.py": up_info},
+        downstream_infos={"InquirerPy/__init__.py": down_info},
+    )
+    assert result.dist == "inquirerpy"
+    assert result.upstream_dist == "InquirerPy"
+    assert result.downstream_dist == "inquirerpy"
+    assert result.is_identical
+
+
+def test_compare_dist_name_normalization_classifies_downstream() -> None:
+    """Downstream-only dist-info files use the downstream dist name for classification."""
+    up_url = "https://pypi.org/InquirerPy-0.3.4-py3-none-any.whl"
+    down_url = "https://rebuild.example.com/inquirerpy-0.3.4-1-py3-none-any.whl"
+    # Upstream has InquirerPy-0.3.4.dist-info/, downstream has inquirerpy-0.3.4.dist-info/
+    up_infos = {
+        "InquirerPy/__init__.py": FakeInfo("InquirerPy/__init__.py", crc=123, file_size=50),
+        "InquirerPy-0.3.4.dist-info/RECORD": FakeInfo(
+            "InquirerPy-0.3.4.dist-info/RECORD", crc=111, file_size=200
+        ),
+    }
+    down_infos = {
+        "InquirerPy/__init__.py": FakeInfo("InquirerPy/__init__.py", crc=123, file_size=50),
+        "inquirerpy-0.3.4.dist-info/RECORD": FakeInfo(
+            "inquirerpy-0.3.4.dist-info/RECORD", crc=222, file_size=200
+        ),
+    }
+    result = _compare(
+        upstream=up_url,
+        downstream=down_url,
+        upstream_infos=up_infos,
+        downstream_infos=down_infos,
+    )
+    # dist-info RECORD files should be classified as EXPECTED, not ERROR
+    assert len(result.only_upstream) == 1
+    assert result.only_upstream[0].classification is Classification.RECORD
+    assert result.only_upstream[0].severity is Severity.EXPECTED
+    assert len(result.only_downstream) == 1
+    assert result.only_downstream[0].classification is Classification.RECORD
+    assert result.only_downstream[0].severity is Severity.EXPECTED
 
 
 def test_compare_different_crc() -> None:

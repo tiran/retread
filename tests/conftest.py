@@ -67,13 +67,20 @@ class FakePage:
 # --- Helper functions ---
 
 
-def make_metadata(name: str, version: str, requires: list[str] | None = None) -> bytes:
+def make_metadata(
+    name: str,
+    version: str,
+    requires: list[str] | None = None,
+    extras: list[str] | None = None,
+) -> bytes:
     """Build a minimal METADATA file as bytes."""
     lines = [
         "Metadata-Version: 2.1",
         f"Name: {name}",
         f"Version: {version}",
     ]
+    for extra in extras or []:
+        lines.append(f"Provides-Extra: {extra}")
     for req in requires or []:
         lines.append(f"Requires-Dist: {req}")
     return "\n".join(lines).encode()
