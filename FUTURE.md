@@ -41,30 +41,6 @@
   `triton-3.7.1` bundles the NVIDIA toolchain in
   `triton/backends/nvidia/` that downstream strips.
 
-## Cross-case data prefix matching
-
-- When upstream and downstream use differently-cased dist names in the
-  wheel filename (e.g. `ImageHash` vs `imagehash`, `SCons` vs `scons`,
-  `InquirerPy` vs `inquirerpy`), the `.data/` prefixes may differ.
-  Files that appear in `only_upstream` and `only_downstream` with
-  matching paths under the respective data prefixes should be paired
-  and compared rather than flagged as missing.
-
-## Normalize compound wheel tags
-
-- The WHEEL file may list compound tags like
-  `cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64` while the
-  filename splits them into separate tags `manylinux_2_17_x86_64` and
-  `manylinux2014_x86_64`.  These are equivalent per PEP 600 but the
-  current tag comparison treats them as mismatched.  Normalize compound
-  tags before comparing.
-  Affects: `base2048`, `fastuuid`, `openai_harmony`, `tlparse`,
-  `minify_html`, `polars`.
-- The same issue applies to interpreter compound tags: the WHEEL file
-  may list `py2.py3-none-any` while the filename splits it into
-  `py2-none-any` and `py3-none-any`.
-  Affects: `pysnow`.
-
 ## Flag .pth files as a warning
 
 - `.pth` files (other than namespace package `-nspkg.pth`) can execute
