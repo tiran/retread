@@ -195,6 +195,55 @@ def _pair_extension_modules(
     return frozenset(paired)
 
 
+def _pair_prefixed_files(
+    only_upstream: list[str],
+    only_downstream: list[str],
+    up_prefix: str,
+    down_prefix: str,
+    upstream_infos: dict[str, Any],
+    downstream_infos: dict[str, Any],
+) -> tuple[frozenset[str], frozenset[str]]:
+    """Pair files that differ only in a directory prefix.
+
+    When upstream and downstream use different prefixes for the same
+    logical directory (e.g. ``ImageHash-4.3.2.data/`` vs
+    ``imagehash-4.3.2.data/``, or ``foo-1.0.dist-info/`` vs
+    ``foo-1.0+local.dist-info/``), files that share the same path
+    after the prefix are paired.
+
+    Returns ``(identical_pairs, different_pairs)`` -- two frozensets
+    of filenames.  *identical_pairs* contains files whose CRC and size
+    match (EXPECTED); *different_pairs* contains files whose content
+    differs (severity determined by caller).
+    """
+    if up_prefix == down_prefix:
+        return frozenset(), frozenset()
+
+    up_by_rest: dict[str, str] = {}
+    for fname in only_upstream:
+        if fname.startswith(up_prefix):
+            up_by_rest[fname[len(up_prefix) :]] = fname
+
+    identical: set[str] = set()
+    different: set[str] = set()
+    for fname in only_downstream:
+        if fname.startswith(down_prefix):
+            rest = fname[len(down_prefix) :]
+            up_fname = up_by_rest.get(rest)
+            if up_fname is None:
+                continue
+            u_info = upstream_infos[up_fname]
+            d_info = downstream_infos[fname]
+            if u_info.CRC == d_info.CRC and u_info.file_size == d_info.file_size:
+                identical.add(up_fname)
+                identical.add(fname)
+            else:
+                different.add(up_fname)
+                different.add(fname)
+
+    return frozenset(identical), frozenset(different)
+
+
 def _is_auditwheel_lib(filename: str) -> bool:
     """Return True if *filename* is inside an auditwheel bundle directory.
 
@@ -312,7 +361,7 @@ def _classify_file(
     # implicit namespace packages).  The filename embeds the build-time
     # Python version, so it always differs between upstream and rebuild.
     if filename.endswith("-nspkg.pth"):
-        return Severity.NOTICE, Classification.NAMESPACE_PKG_PTH
+        return Severity.EXPECTED, Classification.NAMESPACE_PKG_PTH
     # Auto-generated source files (protobuf, ANTLR) differ when
     # rebuilt with a different generator version.
     if _is_protobuf_generated(filename):
@@ -616,6 +665,23 @@ def _compare(
     # downstream).  Paired modules are reclassified as NOTICE.
     paired_extensions = _pair_extension_modules(only_upstream, only_downstream)
 
+    # Pair dist-info and .data/ files across different prefixes caused
+    # by dist name casing (ImageHash vs imagehash) or local version
+    # segments (1.5.0 vs 1.5.0+rhaiv.5).  Files with identical content
+    # become EXPECTED; files with different content keep their original
+    # severity.
+    up_di = f"{up_dist}-{upstream_ver_str}.dist-info/"
+    down_di = f"{down_dist}-{downstream_ver_str}.dist-info/"
+    up_data = f"{up_dist}-{upstream_ver_str}.data/"
+    down_data = f"{down_dist}-{downstream_ver_str}.data/"
+    di_identical, _di_different = _pair_prefixed_files(
+        only_upstream, only_downstream, up_di, down_di, upstream_infos, downstream_infos
+    )
+    data_identical, _data_different = _pair_prefixed_files(
+        only_upstream, only_downstream, up_data, down_data, upstream_infos, downstream_infos
+    )
+    paired_identical = di_identical | data_identical
+
     identical: list[str] = []
     different: list[FileDiff] = []
     for fname in sorted(upstream_names & downstream_names):
@@ -643,7 +709,9 @@ def _compare(
         severity, classification = _classify_file(
             fname, dist=up_dist, version=upstream_ver_str, missing=True
         )
-        if fname in paired_extensions:
+        if fname in paired_identical:
+            severity = Severity.EXPECTED
+        elif fname in paired_extensions and severity is Severity.ERROR:
             severity = Severity.NOTICE
         return FileEntry(filename=fname, severity=severity, classification=classification)
 
@@ -651,7 +719,9 @@ def _compare(
         severity, classification = _classify_file(
             fname, dist=down_dist, version=downstream_ver_str, missing=True
         )
-        if fname in paired_extensions:
+        if fname in paired_identical:
+            severity = Severity.EXPECTED
+        elif fname in paired_extensions and severity is Severity.ERROR:
             severity = Severity.NOTICE
         return FileEntry(filename=fname, severity=severity, classification=classification)
 
@@ -720,7 +790,11 @@ def _metadata_core_match(upstream_bytes: bytes, downstream_bytes: bytes) -> bool
     down_name = packaging.utils.canonicalize_name(downstream_meta["name"])
     if up_name != down_name:
         return False
-    if upstream_meta["version"] != downstream_meta["version"]:
+    # Compare public versions so that local segments (e.g. 1.5.0+rhaiv.5
+    # vs 1.5.0) are treated as equivalent.
+    up_ver = Version(upstream_meta["version"])
+    down_ver = Version(downstream_meta["version"])
+    if up_ver.public != down_ver.public:
         return False
 
     up_extras = set(upstream_meta.get("provides_extra") or [])

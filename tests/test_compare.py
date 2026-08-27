@@ -186,13 +186,13 @@ ERROR = Severity.ERROR
         (
             "sphinxcontrib_jsmath-1.0.1-py3.7-nspkg.pth",
             False,
-            NOTICE,
+            EXPECTED,
             Classification.NAMESPACE_PKG_PTH,
         ),
         (
             "sphinxcontrib_jsmath-1.0.1-py3.12-nspkg.pth",
             True,
-            NOTICE,
+            EXPECTED,
             Classification.NAMESPACE_PKG_PTH,
         ),
         # test directories (always NOTICE)
@@ -433,6 +433,10 @@ def test_compare_resolves_dist_info_case_mismatch() -> None:
             ("foo", "1.0", ["bar>=1.0,!=0.41.*"]),
             True,
         ),
+        # local version segment (1.5.0 vs 1.5.0+rhaiv.5)
+        (("foo", "1.5.0", ["bar>=1.0"]), ("foo", "1.5.0+rhaiv.5", ["bar>=1.0"]), True),
+        # different base version with local segment
+        (("foo", "1.5.0"), ("foo", "2.0+rhaiv.5"), False),
     ],
     ids=[
         "identical",
@@ -447,6 +451,8 @@ def test_compare_resolves_dist_info_case_mismatch() -> None:
         "normalized-prerelease",
         "wildcard-version",
         "wildcard-combined",
+        "local-version",
+        "local-version-different-base",
     ],
 )
 def test_metadata_core_match(up_args: tuple, down_args: tuple, expected: bool) -> None:
@@ -657,6 +663,50 @@ def test_compare_unpaired_extension_stays_error() -> None:
     )
     assert len(result.only_upstream) == 1
     assert result.only_upstream[0].severity is Severity.ERROR
+
+
+# --- dist-info / .data prefix pairing ---
+
+
+def test_compare_pairs_dist_info_identical_content_expected() -> None:
+    """Paired dist-info files with same content should be EXPECTED."""
+    up_url = "https://pypi.org/foo-1.5.0-py3-none-any.whl"
+    down_url = "https://rebuild.example.com/foo-1.5.0+rhaiv.5-1-py3-none-any.whl"
+    up_file = "foo-1.5.0.dist-info/top_level.txt"
+    down_file = "foo-1.5.0+rhaiv.5.dist-info/top_level.txt"
+    up = {up_file: FakeInfo(up_file, crc=111, file_size=50)}
+    down = {down_file: FakeInfo(down_file, crc=111, file_size=50)}
+    result = _compare(
+        upstream=up_url,
+        downstream=down_url,
+        upstream_infos=up,
+        downstream_infos=down,
+    )
+    up_entry = next(e for e in result.only_upstream if e.filename == up_file)
+    assert up_entry.severity is Severity.EXPECTED
+    down_entry = next(e for e in result.only_downstream if e.filename == down_file)
+    assert down_entry.severity is Severity.EXPECTED
+
+
+def test_compare_pairs_dist_info_different_content_keeps_severity() -> None:
+    """Paired dist-info files with different content keep original severity."""
+    up_url = "https://pypi.org/foo-1.5.0-py3-none-any.whl"
+    down_url = "https://rebuild.example.com/foo-1.5.0+rhaiv.5-1-py3-none-any.whl"
+    up_meta = "foo-1.5.0.dist-info/METADATA"
+    down_meta = "foo-1.5.0+rhaiv.5.dist-info/METADATA"
+    up = {up_meta: FakeInfo(up_meta, crc=111, file_size=500)}
+    down = {down_meta: FakeInfo(down_meta, crc=222, file_size=600)}
+    result = _compare(
+        upstream=up_url,
+        downstream=down_url,
+        upstream_infos=up,
+        downstream_infos=down,
+    )
+    # METADATA with different content stays NOTICE (from _classify_file)
+    up_entry = next(e for e in result.only_upstream if e.filename == up_meta)
+    assert up_entry.severity is Severity.NOTICE
+    down_entry = next(e for e in result.only_downstream if e.filename == down_meta)
+    assert down_entry.severity is Severity.NOTICE
 
 
 # --- WheelComparison properties ---
