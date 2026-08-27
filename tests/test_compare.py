@@ -176,6 +176,9 @@ ERROR = Severity.ERROR
         # static archives (lib*.a)
         ("numpy/.dylibs/libopenblas.a", False, EXPECTED, Classification.STATIC_LIBRARY),
         ("numpy/.dylibs/libopenblas.a", True, ERROR, Classification.STATIC_LIBRARY),
+        # Java archives (.jar)
+        ("org.jpype.jar", False, EXPECTED, Classification.JAR),
+        ("org.jpype.jar", True, ERROR, Classification.JAR),
         # version files (always NOTICE)
         ("foo/_version.py", False, NOTICE, Classification.VERSION_FILE),
         ("foo/_version.py", True, NOTICE, Classification.VERSION_FILE),
@@ -242,6 +245,8 @@ ERROR = Severity.ERROR
         "ext-module-missing",
         "static-lib-diff",
         "static-lib-missing",
+        "jar-diff",
+        "jar-missing",
         "version-file-diff",
         "version-file-missing",
         "version-file-alt",
