@@ -136,7 +136,7 @@
 - Consider checking file magic bytes or shebangs to distinguish native
   executables from interpreted scripts.
 
-## Classify auto-generated source files
+## Classify Cython-generated source files
 
 - Cython-generated `.c` and `.cpp` files are included in some wheels
   alongside the compiled extensions.  When the downstream rebuild uses
@@ -145,13 +145,6 @@
   should be classified as NOTICE rather than ERROR.
   Affects: `biotite`, `biotraj`, `cftime`, `scikit_network`, `srsly`,
   `thriftpy2`, `spacy`.
-- Similarly, ANTLR-generated parser files (lexers, parsers, listeners,
-  visitors) differ when rebuilt with a different ANTLR version.
-  Affects: `hydra_core`, `omegaconf`.
-- Protobuf-generated `_pb2.py` and `_pb2_grpc.py` files differ when
-  rebuilt with a different protobuf compiler version.  The generated
-  code is functionally equivalent.
-  Affects: `nvidia_riva_client`, `onnx`, `tensorflow_metadata`.
 
 ## JSON report tool
 

@@ -58,6 +58,7 @@ class Classification(enum.Enum):
     STATIC_LIBRARY = "static library"
     VERSION_FILE = "version file"
     NAMESPACE_PKG_PTH = "namespace pkg pth"
+    GENERATED = "generated"
     TEST = "test"
     OTHER = "other"
 
@@ -102,6 +103,27 @@ def _is_test_file(filename: str) -> bool:
     """
     parts = filename.split("/")
     return any(part in ("test", "tests") for part in parts)
+
+
+_PROTOBUF_SUFFIXES = ("_pb2.py", "_pb2_grpc.py", "_pb2.pyi", "_pb2_grpc.pyi")
+_ANTLR_SUFFIXES = ("Lexer.py", "Parser.py", "ParserListener.py", "ParserVisitor.py")
+
+
+def _is_generated_source(filename: str) -> bool:
+    """Return True if *filename* looks like an auto-generated source file.
+
+    Matches protobuf-generated files (``*_pb2.py``, ``*_pb2_grpc.py``
+    and their ``.pyi`` stubs) and ANTLR-generated files (``*Lexer.py``,
+    ``*Parser.py``, ``*ParserListener.py``, ``*ParserVisitor.py`` inside
+    a ``grammar/gen/`` directory).
+    """
+    if any(filename.endswith(suffix) for suffix in _PROTOBUF_SUFFIXES):
+        return True
+    # ANTLR-generated parsers live in a grammar/gen/ subdirectory
+    if "grammar/gen/" in filename:
+        basename = posixpath.basename(filename)
+        return any(basename.endswith(suffix) for suffix in _ANTLR_SUFFIXES)
+    return False
 
 
 def _is_auditwheel_lib(filename: str) -> bool:
@@ -222,6 +244,10 @@ def _classify_file(
     # Python version, so it always differs between upstream and rebuild.
     if filename.endswith("-nspkg.pth"):
         return Severity.NOTICE, Classification.NAMESPACE_PKG_PTH
+    # Auto-generated source files (protobuf, ANTLR) differ when
+    # rebuilt with a different generator version.
+    if _is_generated_source(filename):
+        return Severity.NOTICE, Classification.GENERATED
     return Severity.ERROR, Classification.OTHER
 
 
