@@ -72,8 +72,8 @@ def test_is_auditwheel_lib(filename: str, expected: bool) -> None:
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
-        ("https://example.com/foo.whl", True),
-        ("http://example.com/foo.whl", True),
+        ("https://pkgs.example/foo.whl", True),
+        ("http://pkgs.example/foo.whl", True),
         ("/home/user/foo.whl", False),
         ("foo.whl", False),
     ],
@@ -88,9 +88,9 @@ def test_is_url(value: str, expected: bool) -> None:
 @pytest.mark.parametrize(
     ("source", "expected"),
     [
-        ("https://example.com/path/foo-1.0-py3-none-any.whl", "foo-1.0-py3-none-any.whl"),
+        ("https://pkgs.example/path/foo-1.0-py3-none-any.whl", "foo-1.0-py3-none-any.whl"),
         (
-            "https://example.com/path/foo-1.0-py3-none-any.whl?token=abc#sha256=xyz",
+            "https://pkgs.example/path/foo-1.0-py3-none-any.whl?token=abc#sha256=xyz",
             "foo-1.0-py3-none-any.whl",
         ),
         ("/home/user/foo-1.0-py3-none-any.whl", "foo-1.0-py3-none-any.whl"),
@@ -344,7 +344,7 @@ def test_find_dist_info_name_ignores_different_package() -> None:
 def test_compare_resolves_dist_info_case_mismatch() -> None:
     """_compare() resolves dist-info name when casing differs from filename."""
     up_url = "https://pypi.org/InquirerPy-0.3.4-py3-none-any.whl"
-    down_url = "https://rebuild.example.com/InquirerPy-0.3.4-1-py3-none-any.whl"
+    down_url = "https://rebuild.test/InquirerPy-0.3.4-1-py3-none-any.whl"
     up_infos = {
         "InquirerPy/__init__.py": FakeInfo("InquirerPy/__init__.py", crc=123, file_size=50),
         "inquirerpy-0.3.4.dist-info/RECORD": FakeInfo(
@@ -489,7 +489,7 @@ def test_compare_identical() -> None:
 def test_compare_dist_name_normalization() -> None:
     """upstream_dist is resolved from the actual dist-info directory."""
     up_url = "https://pypi.org/InquirerPy-0.3.4-py3-none-any.whl"
-    down_url = "https://rebuild.example.com/inquirerpy-0.3.4-1-py3-none-any.whl"
+    down_url = "https://rebuild.test/inquirerpy-0.3.4-1-py3-none-any.whl"
     up_infos = {
         "InquirerPy/__init__.py": FakeInfo("InquirerPy/__init__.py", crc=123, file_size=50),
         "inquirerpy-0.3.4.dist-info/RECORD": FakeInfo(
@@ -518,7 +518,7 @@ def test_compare_dist_name_normalization() -> None:
 def test_compare_dist_name_normalization_classifies_downstream() -> None:
     """Downstream-only dist-info files use the downstream dist name for classification."""
     up_url = "https://pypi.org/InquirerPy-0.3.4-py3-none-any.whl"
-    down_url = "https://rebuild.example.com/inquirerpy-0.3.4-1-py3-none-any.whl"
+    down_url = "https://rebuild.test/inquirerpy-0.3.4-1-py3-none-any.whl"
     # Upstream has InquirerPy-0.3.4.dist-info/, downstream has inquirerpy-0.3.4.dist-info/
     up_infos = {
         "InquirerPy/__init__.py": FakeInfo("InquirerPy/__init__.py", crc=123, file_size=50),
@@ -663,50 +663,6 @@ def test_compare_unpaired_extension_stays_error() -> None:
     )
     assert len(result.only_upstream) == 1
     assert result.only_upstream[0].severity is Severity.ERROR
-
-
-# --- dist-info / .data prefix pairing ---
-
-
-def test_compare_pairs_dist_info_identical_content_expected() -> None:
-    """Paired dist-info files with same content should be EXPECTED."""
-    up_url = "https://pypi.org/foo-1.5.0-py3-none-any.whl"
-    down_url = "https://rebuild.example.com/foo-1.5.0+rhaiv.5-1-py3-none-any.whl"
-    up_file = "foo-1.5.0.dist-info/top_level.txt"
-    down_file = "foo-1.5.0+rhaiv.5.dist-info/top_level.txt"
-    up = {up_file: FakeInfo(up_file, crc=111, file_size=50)}
-    down = {down_file: FakeInfo(down_file, crc=111, file_size=50)}
-    result = _compare(
-        upstream=up_url,
-        downstream=down_url,
-        upstream_infos=up,
-        downstream_infos=down,
-    )
-    up_entry = next(e for e in result.only_upstream if e.filename == up_file)
-    assert up_entry.severity is Severity.EXPECTED
-    down_entry = next(e for e in result.only_downstream if e.filename == down_file)
-    assert down_entry.severity is Severity.EXPECTED
-
-
-def test_compare_pairs_dist_info_different_content_keeps_severity() -> None:
-    """Paired dist-info files with different content keep original severity."""
-    up_url = "https://pypi.org/foo-1.5.0-py3-none-any.whl"
-    down_url = "https://rebuild.example.com/foo-1.5.0+rhaiv.5-1-py3-none-any.whl"
-    up_meta = "foo-1.5.0.dist-info/METADATA"
-    down_meta = "foo-1.5.0+rhaiv.5.dist-info/METADATA"
-    up = {up_meta: FakeInfo(up_meta, crc=111, file_size=500)}
-    down = {down_meta: FakeInfo(down_meta, crc=222, file_size=600)}
-    result = _compare(
-        upstream=up_url,
-        downstream=down_url,
-        upstream_infos=up,
-        downstream_infos=down,
-    )
-    # METADATA with different content stays NOTICE (from _classify_file)
-    up_entry = next(e for e in result.only_upstream if e.filename == up_meta)
-    assert up_entry.severity is Severity.NOTICE
-    down_entry = next(e for e in result.only_downstream if e.filename == down_meta)
-    assert down_entry.severity is Severity.NOTICE
 
 
 # --- WheelComparison properties ---

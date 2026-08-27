@@ -54,7 +54,7 @@ class FakePkg:
 
     def __init__(self, filename: str, url: str = "") -> None:
         self.filename = filename
-        self.url = url or f"https://example.com/{filename}"
+        self.url = url or f"https://pkgs.example/{filename}"
 
 
 class FakePage:
@@ -123,7 +123,7 @@ def make_wheel_file(root_is_purelib: bool, tags: list[str]) -> bytes:
 # --- Reusable fixtures ---
 
 UPSTREAM_URL = "https://pypi.org/foo-1.0-py3-none-any.whl"
-DOWNSTREAM_URL = "https://rebuild.example.com/foo-1.0-py3-none-any.whl"
+DOWNSTREAM_URL = "https://rebuild.test/foo-1.0-py3-none-any.whl"
 
 
 @pytest.fixture()
