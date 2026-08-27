@@ -31,6 +31,13 @@ package indexes.
   `{dist_name}-{dist_version}.dist-info/` (derived from the wheel filename).
   Never assume there is only one `.dist-info/` directory in a wheel.
 
+## Test conventions
+
+- **Use reserved TLDs in test URLs.** Use `.example` or `.test` TLDs
+  (RFC 2606) for fake URLs in tests, not `example.com`.
+  Good: `https://pypi.example/`, `https://rebuild.test/`
+  Bad: `https://example.com/`, `https://rebuild.example.com/`
+
 ## Code style rules
 
 - **No local imports.** All imports must be at the top of the file.
