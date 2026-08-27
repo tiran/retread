@@ -103,6 +103,18 @@
 - Consider checking file magic bytes or shebangs to distinguish native
   executables from interpreted scripts.
 
+## Missing license files
+
+- Detect when upstream includes a license file (LICENSE, LICENCE,
+  COPYING, or files in `licenses/`) and the downstream rebuild is
+  missing it.  Report as ERROR since license files must not be
+  stripped from redistributed packages.
+- Handle PEP 639 license file relocation: newer build backends move
+  license files from the package directory into
+  `{dist}-{version}.dist-info/licenses/`.  When the file moves
+  between directories but is still present, classify as NOTICE
+  rather than a missing-file error.
+
 ## JSON report tool
 
 - Tool to consume a JSON report (from `retread compare -f json`) and
