@@ -10,6 +10,7 @@ from retread._compare import WheelComparison
 from retread._platform import (
     PlatformWarning,
     _check_single_wheel,
+    _expand_compound_tags,
     _parse_wheel_tags,
     check_platform_abi,
 )
@@ -98,6 +99,46 @@ def test_wheel_tags_subset_of_filename_tags():
     tag_warns = [w for w in warnings if "Tag entries" in w.message]
     assert len(tag_warns) == 1
     assert "only in filename" in tag_warns[0].message
+
+
+def test_expand_compound_platform_tags():
+    """Compound platform tags should expand into individual tags."""
+    tags = ["cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64"]
+    assert _expand_compound_tags(tags) == {
+        "cp312-cp312-manylinux_2_17_x86_64",
+        "cp312-cp312-manylinux2014_x86_64",
+    }
+
+
+def test_expand_compound_interpreter_tags():
+    """Compound interpreter tags should expand into individual tags."""
+    tags = ["py2.py3-none-any"]
+    assert _expand_compound_tags(tags) == {"py2-none-any", "py3-none-any"}
+
+
+def test_compound_wheel_tags_match_filename():
+    """Compound WHEEL tags should match expanded filename tags."""
+    infos = {"foo/__init__.py": FakeInfo("foo/__init__.py")}
+    multi_tags = frozenset(
+        {
+            Tag("cp312", "cp312", "manylinux_2_17_x86_64"),
+            Tag("cp312", "cp312", "manylinux2014_x86_64"),
+        }
+    )
+    wheel_bytes = make_wheel_file(
+        False, ["cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64"]
+    )
+    warnings = _check_single_wheel("upstream", infos, wheel_bytes, multi_tags, "foo", "1.0")
+    assert not any("Tag entries" in w.message for w in warnings)
+
+
+def test_compound_interpreter_tags_match_filename():
+    """Compound interpreter WHEEL tags should match expanded filename tags."""
+    infos = {"foo/__init__.py": FakeInfo("foo/__init__.py")}
+    multi_tags = frozenset({Tag("py2", "none", "any"), Tag("py3", "none", "any")})
+    wheel_bytes = make_wheel_file(True, ["py2.py3-none-any"])
+    warnings = _check_single_wheel("upstream", infos, wheel_bytes, multi_tags, "foo", "1.0")
+    assert not any("Tag entries" in w.message for w in warnings)
 
 
 def test_platlib_no_shared_libs_warning():

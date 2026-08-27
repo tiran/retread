@@ -54,6 +54,38 @@ def _parse_wheel_tags(wheel_bytes: bytes) -> tuple[bool, list[str]]:
     return root_is_purelib, [t.strip() for t in tags]
 
 
+def _expand_compound_tags(tags: list[str]) -> set[str]:
+    """Expand compound WHEEL tags into individual tags.
+
+    A WHEEL file may list compound tags where one or more components
+    are dot-separated (PEP 425 / PEP 600), e.g.:
+
+    * ``cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64``
+      expands to ``cp312-cp312-manylinux_2_17_x86_64`` and
+      ``cp312-cp312-manylinux2014_x86_64``
+    * ``py2.py3-none-any`` expands to ``py2-none-any`` and
+      ``py3-none-any``
+
+    The filename parser (``packaging.utils.parse_wheel_filename``)
+    already performs this expansion, so expanding WHEEL tags makes
+    the sets comparable.
+    """
+    expanded: set[str] = set()
+    for tag in tags:
+        parts = tag.split("-")
+        if len(parts) != 3:
+            expanded.add(tag)
+            continue
+        interps = parts[0].split(".")
+        abis = parts[1].split(".")
+        platforms = parts[2].split(".")
+        for interp in interps:
+            for abi in abis:
+                for platform in platforms:
+                    expanded.add(f"{interp}-{abi}-{platform}")
+    return expanded
+
+
 def _check_single_wheel(
     side: str,
     infos: dict[str, Any],
@@ -148,7 +180,7 @@ def _check_single_wheel(
         filename_tag_strs = {
             f"{tag.interpreter}-{tag.abi}-{tag.platform}" for tag in filename_tags
         }
-        wheel_tag_set = set(wheel_tags)
+        wheel_tag_set = _expand_compound_tags(wheel_tags)
         if wheel_tag_set != filename_tag_strs:
             only_in_wheel = sorted(wheel_tag_set - filename_tag_strs)
             only_in_filename = sorted(filename_tag_strs - wheel_tag_set)
