@@ -136,16 +136,6 @@
 - Consider checking file magic bytes or shebangs to distinguish native
   executables from interpreted scripts.
 
-## Classify Cython-generated source files
-
-- Cython-generated `.c` and `.cpp` files are included in some wheels
-  alongside the compiled extensions.  When the downstream rebuild uses
-  a different Cython version, the generated sources differ even though
-  the compiled extensions are functionally equivalent.  These files
-  should be classified as NOTICE rather than ERROR.
-  Affects: `biotite`, `biotraj`, `cftime`, `scikit_network`, `srsly`,
-  `thriftpy2`, `spacy`.
-
 ## JSON report tool
 
 - Tool to consume a JSON report (from `retread compare -f json`) and
