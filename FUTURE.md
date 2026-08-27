@@ -74,10 +74,6 @@
   `ast_serialize.abi3t.so` (cp315-abi3.abi3t) while downstream has
   `ast_serialize.abi3.so` (cp39-abi3) — same library, different
   stable ABI variant.
-- When multiple abi3/abi3t wheels exist for the same version, prefer
-  the wheel whose minimum CPython version is closest to (or matches)
-  the downstream wheel, or treat the abi3/abi3t suffix difference as
-  an expected platform difference rather than an error.
 - Also handle the case where upstream uses stable ABI (`.abi3.so`)
   while downstream builds a version-specific extension
   (`.cpython-312-x86_64-linux-gnu.so`), or vice versa.  The extension

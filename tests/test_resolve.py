@@ -5,7 +5,9 @@ from packaging.tags import Tag
 
 from retread._errors import InvalidWheelError, WheelNotFoundError
 from retread._resolve import (
+    _best_tag_score,
     _extract_arch,
+    _tag_match_score,
     _tags_compatible,
     _wheels_compatible,
     find_matching_wheel,
@@ -190,3 +192,80 @@ def test_find_matching_wheel_skips_invalid() -> None:
     )
     pkg = find_matching_wheel(page, spec, index="https://pypi.org/simple/")
     assert pkg.filename == "foo-1.0-cp312-cp312-manylinux_2_28_x86_64.whl"
+
+
+def test_find_matching_wheel_prefers_exact_tags() -> None:
+    """Exact tag match should be preferred over abi3 compatibility."""
+    spec = parse_wheel_spec("foo-1.0-cp312-cp312-linux_x86_64.whl")
+    page = FakePage(
+        [
+            FakePkg("foo-1.0-cp39-abi3-manylinux_2_17_x86_64.whl"),
+            FakePkg("foo-1.0-cp312-cp312-manylinux_2_28_x86_64.whl"),
+        ]
+    )
+    pkg = find_matching_wheel(page, spec, index="https://pypi.org/simple/")
+    assert pkg.filename == "foo-1.0-cp312-cp312-manylinux_2_28_x86_64.whl"
+
+
+def test_find_matching_wheel_prefers_closer_abi3() -> None:
+    """When both are abi3, prefer the one with matching minimum version."""
+    spec = parse_wheel_spec("foo-1.0-cp312-abi3-linux_x86_64.whl")
+    page = FakePage(
+        [
+            FakePkg("foo-1.0-cp39-abi3-manylinux_2_17_x86_64.whl"),
+            FakePkg("foo-1.0-cp312-abi3-manylinux_2_28_x86_64.whl"),
+        ]
+    )
+    pkg = find_matching_wheel(page, spec, index="https://pypi.org/simple/")
+    assert pkg.filename == "foo-1.0-cp312-abi3-manylinux_2_28_x86_64.whl"
+
+
+def test_find_matching_wheel_prefers_abi3_over_abi3t() -> None:
+    """Prefer exact abi match over compound abi3.abi3t tag."""
+    spec = parse_wheel_spec("foo-1.0-cp39-abi3-linux_x86_64.whl")
+    # The compound tag "abi3.abi3t" expands to two tags: one with abi3 and
+    # one with abi3t.  The abi3 tag matches, but cp315 != cp39 so the
+    # compound wheel scores lower than the exact cp39-abi3 match.
+    page = FakePage(
+        [
+            FakePkg("foo-1.0-cp315-abi3.abi3t-manylinux_2_17_x86_64.whl"),
+            FakePkg("foo-1.0-cp39-abi3-manylinux_2_17_x86_64.whl"),
+        ]
+    )
+    pkg = find_matching_wheel(page, spec, index="https://pypi.org/simple/")
+    assert pkg.filename == "foo-1.0-cp39-abi3-manylinux_2_17_x86_64.whl"
+
+
+# --- _tag_match_score / _best_tag_score ---
+
+
+@pytest.mark.parametrize(
+    ("ds_tag", "us_tag", "expected"),
+    [
+        # exact match → 2
+        (Tag("cp312", "cp312", "linux_x86_64"), Tag("cp312", "cp312", "linux_x86_64"), 2),
+        # exact abi3 match → 2
+        (Tag("cp39", "abi3", "linux_x86_64"), Tag("cp39", "abi3", "linux_x86_64"), 2),
+        # abi3 ↔ concrete → 1
+        (Tag("cp39", "abi3", "linux_x86_64"), Tag("cp312", "cp312", "linux_x86_64"), 1),
+        # both abi3 different versions → 1
+        (Tag("cp39", "abi3", "linux_x86_64"), Tag("cp312", "abi3", "linux_x86_64"), 1),
+        # incompatible → 0
+        (Tag("cp312", "cp312", "linux_x86_64"), Tag("cp311", "cp311", "linux_x86_64"), 0),
+    ],
+    ids=["exact", "exact-abi3", "abi3-concrete", "both-abi3-diff", "incompatible"],
+)
+def test_tag_match_score(ds_tag: Tag, us_tag: Tag, expected: int) -> None:
+    assert _tag_match_score(ds_tag, us_tag) == expected
+
+
+def test_best_tag_score() -> None:
+    ds_tags = frozenset({Tag("cp312", "cp312", "linux_x86_64")})
+    # upstream has both an abi3 and an exact match tag
+    us_tags = frozenset(
+        {
+            Tag("cp39", "abi3", "linux_x86_64"),
+            Tag("cp312", "cp312", "linux_x86_64"),
+        }
+    )
+    assert _best_tag_score(ds_tags, us_tags) == 2
