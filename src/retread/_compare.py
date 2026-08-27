@@ -22,7 +22,7 @@ import packaging.utils
 from packaging.metadata import parse_email
 from packaging.requirements import Requirement
 from packaging.specifiers import SpecifierSet
-from packaging.version import Version
+from packaging.version import InvalidVersion, Version
 
 from retread._errors import InvalidWheelError
 from retread._platform import PlatformWarning, check_platform_abi
@@ -550,6 +550,19 @@ def _compare(
     )
 
 
+def _normalize_version_spec(spec: str) -> str:
+    """Normalize a single version string, keeping wildcards unchanged.
+
+    PEP 440 wildcard specifiers (e.g. ``==2.0.*``, ``!=0.41.*``) are
+    valid in ``Requires-Dist`` but cannot be parsed as ``Version``
+    objects.  Fall back to the original string in that case.
+    """
+    try:
+        return str(Version(spec))
+    except InvalidVersion:
+        return spec
+
+
 def _normalize_req(raw: str) -> str:
     """Normalize a Requires-Dist entry for comparison.
 
@@ -558,12 +571,13 @@ def _normalize_req(raw: str) -> str:
     ``typing-extensions`` and ``typing_extensions`` compare equal.
     Version specifiers are normalized through ``Version`` so that
     PEP 440 equivalent spellings like ``2021.8.17-beta.43`` and
-    ``2021.8.17b43`` compare equal.
+    ``2021.8.17b43`` compare equal.  Wildcard versions (``==2.0.*``)
+    are kept as-is.
     """
     req = Requirement(raw)
     req.name = packaging.utils.canonicalize_name(req.name)
     req.specifier = SpecifierSet(
-        ",".join(f"{s.operator}{Version(s.version)}" for s in req.specifier)
+        ",".join(f"{s.operator}{_normalize_version_spec(s.version)}" for s in req.specifier)
     )
     return str(req)
 
