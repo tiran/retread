@@ -70,14 +70,12 @@
 - Report as a warning for upstream wheels and an error for downstream
   wheels (a rebuild should not reproduce this packaging mistake).
 
-## Improve data scripts heuristic
+## Detect native executables in data scripts [low]
 
-- The large scripts heuristic flags `data/scripts/` files larger than
-  8 KiB as potential native executables, but produces false positives
-  for large shell or Python scripts.
-  Affects: `pdfminer_six`, `pyelftools`, `xlrd`.
-- Consider checking file magic bytes or shebangs to distinguish native
-  executables from interpreted scripts.
+- Consider checking file magic bytes or shebangs to distinguish
+  native executables from interpreted scripts in `data/scripts/`.
+  The current heuristic uses a file size threshold (64 KiB) which
+  may still produce false positives for very large scripts.
 
 ## Missing license files
 
