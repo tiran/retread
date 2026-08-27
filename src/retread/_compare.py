@@ -112,7 +112,7 @@ def _is_test_file(filename: str) -> bool:
 
 _PROTOBUF_SUFFIXES = ("_pb2.py", "_pb2_grpc.py", "_pb2.pyi", "_pb2_grpc.pyi")
 _ANTLR_SUFFIXES = ("Lexer.py", "Parser.py", "ParserListener.py", "ParserVisitor.py")
-_C_SOURCE_SUFFIXES = (".c", ".cpp", ".h", ".hpp")
+_C_SOURCE_SUFFIXES = (".c", ".cpp", ".h", ".hpp", ".inc")
 _BUILD_CONFIG_SUFFIXES = (".cmake", ".pc")
 
 
