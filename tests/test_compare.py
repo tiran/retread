@@ -13,6 +13,7 @@ from retread._compare import (
     _check_metadata,
     _classify_file,
     _compare,
+    _extension_stem,
     _find_dist_info_name,
     _is_auditwheel_lib,
     _is_shared_library,
@@ -596,6 +597,66 @@ def test_compare_dist_info_record_is_expected() -> None:
     )
     assert result.different[0].severity is Severity.EXPECTED
     assert result.different[0].classification is Classification.RECORD
+
+
+# --- _extension_stem ---
+
+
+@pytest.mark.parametrize(
+    ("filename", "expected"),
+    [
+        ("foo/_bar.cpython-312-x86_64-linux-gnu.so", "foo/_bar"),
+        ("foo/_bar.abi3.so", "foo/_bar"),
+        ("foo/_bar.abi3t.so", "foo/_bar"),
+        ("foo/_bar.so", "foo/_bar"),
+        ("foo/bar.py", None),
+        ("foo/bar.c", None),
+        ("foo.libs/libbar.so.1", None),
+    ],
+    ids=["cpython", "abi3", "abi3t", "bare-so", "python", "c-source", "versioned-so"],
+)
+def test_extension_stem(filename: str, expected: str | None) -> None:
+    assert _extension_stem(filename) == expected
+
+
+# --- extension module ABI pairing ---
+
+
+def test_compare_pairs_abi3_with_cpython_extension() -> None:
+    """Extension modules with different ABI suffixes should be paired as NOTICE."""
+    up_so = "foo/_bar.abi3.so"
+    down_so = "foo/_bar.cpython-312-x86_64-linux-gnu.so"
+    up = {up_so: FakeInfo(up_so, crc=111, file_size=1000)}
+    down = {down_so: FakeInfo(down_so, crc=222, file_size=2000)}
+    result = _compare(
+        upstream=UPSTREAM_URL,
+        downstream=DOWNSTREAM_URL,
+        upstream_infos=up,
+        downstream_infos=down,
+    )
+    assert len(result.only_upstream) == 1
+    assert result.only_upstream[0].filename == up_so
+    assert result.only_upstream[0].severity is Severity.NOTICE
+    assert result.only_upstream[0].classification is Classification.EXTENSION_MODULE
+    assert len(result.only_downstream) == 1
+    assert result.only_downstream[0].filename == down_so
+    assert result.only_downstream[0].severity is Severity.NOTICE
+    assert result.only_downstream[0].classification is Classification.EXTENSION_MODULE
+
+
+def test_compare_unpaired_extension_stays_error() -> None:
+    """Extension modules with no ABI counterpart should remain ERROR."""
+    up_so = "foo/_extra.cpython-312-x86_64-linux-gnu.so"
+    up = {up_so: FakeInfo(up_so, crc=111, file_size=1000)}
+    down: dict[str, FakeInfo] = {}
+    result = _compare(
+        upstream=UPSTREAM_URL,
+        downstream=DOWNSTREAM_URL,
+        upstream_infos=up,
+        downstream_infos=down,
+    )
+    assert len(result.only_upstream) == 1
+    assert result.only_upstream[0].severity is Severity.ERROR
 
 
 # --- WheelComparison properties ---
