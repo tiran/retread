@@ -86,20 +86,14 @@
   while downstream has `_zmq.cpython-312-x86_64-linux-gnu.so` — same
   module, different ABI linkage.
 
-## Cross-case dist-info and data prefix matching
+## Cross-case data prefix matching
 
 - When upstream and downstream use differently-cased dist names in the
   wheel filename (e.g. `ImageHash` vs `imagehash`, `SCons` vs `scons`,
-  `InquirerPy` vs `inquirerpy`), the `.dist-info/` and `.data/`
-  prefixes differ.  Files that appear in `only_upstream` and
-  `only_downstream` with matching paths under the respective prefixes
-  should be paired and compared rather than flagged as missing.
-- Currently `_classify_file` only tries the downstream dist prefix, so
-  upstream dist-info files with a different-case prefix fall through to
-  `[other]` classification instead of their proper labels (RECORD,
-  WHEEL, METADATA, etc.).  Classification should try both prefixes.
-  Example: `InquirerPy-0.3.4.dist-info/LICENSE` is classified as
-  `[other]` instead of `[license]`.
+  `InquirerPy` vs `inquirerpy`), the `.data/` prefixes may differ.
+  Files that appear in `only_upstream` and `only_downstream` with
+  matching paths under the respective data prefixes should be paired
+  and compared rather than flagged as missing.
 
 ## Normalize compound wheel tags
 

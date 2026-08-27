@@ -21,6 +21,7 @@ from typing import Any
 import packaging.utils
 from packaging.metadata import parse_email
 from packaging.requirements import Requirement
+from packaging.specifiers import SpecifierSet
 from packaging.version import Version
 
 from retread._errors import InvalidWheelError
@@ -102,6 +103,43 @@ def _is_auditwheel_lib(filename: str) -> bool:
     """
     parts = filename.split("/")
     return any(part.endswith(".libs") for part in parts)
+
+
+def _find_dist_info_name(
+    infos: dict[str, Any],
+    dist: str,
+    version: str,
+) -> str:
+    """Find the distribution name used in the dist-info directory.
+
+    The dist-info directory name inside a wheel may differ in casing
+    or punctuation from the wheel filename.  This function scans
+    *infos* for a root-level ``{name}-{version}.dist-info/`` entry
+    whose canonical name matches *dist* and returns the *name* portion
+    actually used.
+
+    Examples of real-world mismatches between wheel filename and
+    dist-info directory:
+
+    * ``InquirerPy-0.3.4.whl`` → ``inquirerpy-0.3.4.dist-info/``
+    * ``scons-4.5.2.whl`` → ``SCons-4.5.2.dist-info/``
+    * ``jpype1-1.5.0.whl`` → ``JPype1-1.5.0.dist-info/``
+    * ``jaraco_classes-3.4.0.whl`` → ``jaraco.classes-3.4.0.dist-info/``
+
+    Falls back to *dist* unchanged when no matching directory is found.
+    """
+    canonical = packaging.utils.canonicalize_name(dist)
+    suffix = f"-{version}.dist-info"
+    for filename in infos:
+        if filename.count("/") != 1:
+            continue
+        dir_part, _rest = filename.split("/", 1)
+        if not dir_part.endswith(suffix):
+            continue
+        name_part = dir_part.removesuffix(suffix)
+        if name_part and packaging.utils.canonicalize_name(name_part) == canonical:
+            return name_part
+    return dist
 
 
 def _classify_file(
@@ -446,6 +484,8 @@ def _compare(
         raise InvalidWheelError(
             f"dist name mismatch: upstream {up_dist!r} != downstream {down_dist!r}"
         )
+    up_dist = _find_dist_info_name(upstream_infos, up_dist, upstream_ver_str)
+    down_dist = _find_dist_info_name(downstream_infos, down_dist, downstream_ver_str)
     upstream_names = set(upstream_infos)
     downstream_names = set(downstream_infos)
 
@@ -510,9 +550,15 @@ def _normalize_req(raw: str) -> str:
     Uses ``Requirement`` to normalize whitespace, quoting, and marker
     formatting, then canonicalizes the distribution name so that
     ``typing-extensions`` and ``typing_extensions`` compare equal.
+    Version specifiers are normalized through ``Version`` so that
+    PEP 440 equivalent spellings like ``2021.8.17-beta.43`` and
+    ``2021.8.17b43`` compare equal.
     """
     req = Requirement(raw)
     req.name = packaging.utils.canonicalize_name(req.name)
+    req.specifier = SpecifierSet(
+        ",".join(f"{s.operator}{Version(s.version)}" for s in req.specifier)
+    )
     return str(req)
 
 

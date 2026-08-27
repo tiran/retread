@@ -13,6 +13,7 @@ from retread._compare import (
     _check_metadata,
     _classify_file,
     _compare,
+    _find_dist_info_name,
     _is_auditwheel_lib,
     _is_shared_library,
     _local_zip_infos,
@@ -225,6 +226,105 @@ def test_classify_file(
     assert classification is expected_classification
 
 
+# --- _find_dist_info_name ---
+
+
+def test_find_dist_info_name_exact_match() -> None:
+    """When filename-derived name matches dist-info exactly, return it."""
+    infos = {"foo-1.0.dist-info/RECORD": None}
+    assert _find_dist_info_name(infos, "foo", "1.0") == "foo"
+
+
+def test_find_dist_info_name_case_mismatch() -> None:
+    """Lowercase dist-info for uppercase wheel filename (InquirerPy)."""
+    infos = {"inquirerpy-0.3.4.dist-info/METADATA": None}
+    assert _find_dist_info_name(infos, "InquirerPy", "0.3.4") == "inquirerpy"
+
+
+def test_find_dist_info_name_uppercase_dist_info() -> None:
+    """Uppercase dist-info for lowercase wheel filename (SCons)."""
+    infos = {"SCons-4.5.2.dist-info/WHEEL": None}
+    assert _find_dist_info_name(infos, "scons", "4.5.2") == "SCons"
+
+
+def test_find_dist_info_name_dot_separator() -> None:
+    """Dot-separated dist-info name (jaraco.classes)."""
+    infos = {"jaraco.classes-3.4.0.dist-info/RECORD": None}
+    assert _find_dist_info_name(infos, "jaraco_classes", "3.4.0") == "jaraco.classes"
+
+
+def test_find_dist_info_name_no_dist_info_fallback() -> None:
+    """When no dist-info directory is found, return the original name."""
+    infos = {"foo/__init__.py": None}
+    assert _find_dist_info_name(infos, "foo", "1.0") == "foo"
+
+
+def test_find_dist_info_name_ignores_nested_dist_info() -> None:
+    """Vendored dist-info nested under a subdirectory should be ignored."""
+    infos = {
+        "vendor/foo-1.0.dist-info/RECORD": None,
+        "foo-1.0.dist-info/RECORD": None,
+    }
+    assert _find_dist_info_name(infos, "foo", "1.0") == "foo"
+
+
+def test_find_dist_info_name_ignores_deeply_nested_dist_info() -> None:
+    """Deeply nested dist-info (multiple slashes) should be ignored."""
+    infos = {"a/b/foo-1.0.dist-info/RECORD": None}
+    assert _find_dist_info_name(infos, "foo", "1.0") == "foo"
+
+
+def test_find_dist_info_name_ignores_different_package() -> None:
+    """A dist-info for a different package should be ignored."""
+    infos = {"other_pkg-1.0.dist-info/RECORD": None}
+    assert _find_dist_info_name(infos, "foo", "1.0") == "foo"
+
+
+# --- _find_dist_info_name integration with _compare ---
+
+
+def test_compare_resolves_dist_info_case_mismatch() -> None:
+    """_compare() resolves dist-info name when casing differs from filename."""
+    up_url = "https://pypi.org/InquirerPy-0.3.4-py3-none-any.whl"
+    down_url = "https://rebuild.example.com/InquirerPy-0.3.4-1-py3-none-any.whl"
+    up_infos = {
+        "InquirerPy/__init__.py": FakeInfo("InquirerPy/__init__.py", crc=123, file_size=50),
+        "inquirerpy-0.3.4.dist-info/RECORD": FakeInfo(
+            "inquirerpy-0.3.4.dist-info/RECORD", crc=111, file_size=200
+        ),
+        "inquirerpy-0.3.4.dist-info/METADATA": FakeInfo(
+            "inquirerpy-0.3.4.dist-info/METADATA", crc=333, file_size=100
+        ),
+    }
+    down_infos = {
+        "InquirerPy/__init__.py": FakeInfo("InquirerPy/__init__.py", crc=123, file_size=50),
+        "inquirerpy-0.3.4.dist-info/RECORD": FakeInfo(
+            "inquirerpy-0.3.4.dist-info/RECORD", crc=222, file_size=200
+        ),
+        "inquirerpy-0.3.4.dist-info/METADATA": FakeInfo(
+            "inquirerpy-0.3.4.dist-info/METADATA", crc=444, file_size=100
+        ),
+    }
+    result = _compare(
+        upstream=up_url,
+        downstream=down_url,
+        upstream_infos=up_infos,
+        downstream_infos=down_infos,
+    )
+    assert result.upstream_dist == "inquirerpy"
+    assert result.downstream_dist == "inquirerpy"
+    # RECORD should be EXPECTED, not ERROR
+    record_diffs = [d for d in result.different if d.filename.endswith("/RECORD")]
+    assert len(record_diffs) == 1
+    assert record_diffs[0].severity is Severity.EXPECTED
+    assert record_diffs[0].classification is Classification.RECORD
+    # METADATA should be NOTICE, not ERROR
+    meta_diffs = [d for d in result.different if d.filename.endswith("/METADATA")]
+    assert len(meta_diffs) == 1
+    assert meta_diffs[0].severity is Severity.NOTICE
+    assert meta_diffs[0].classification is Classification.METADATA
+
+
 # --- _metadata_core_match ---
 
 
@@ -257,6 +357,12 @@ def test_classify_file(
         ),
         # hyphen vs underscore in package Name (PEP 503 equivalence)
         (("typing-inspect", "0.9.0"), ("typing_inspect", "0.9.0"), True),
+        # PEP 440 pre-release normalization (beta.43 == b43)
+        (
+            ("foo", "1.0", ["furo (>=2021.8.17-beta.43,<2022.0.0)"]),
+            ("foo", "1.0", ["furo (>=2021.8.17b43,<2022.0.0)"]),
+            True,
+        ),
     ],
     ids=[
         "identical",
@@ -268,6 +374,7 @@ def test_classify_file(
         "reordered-extras",
         "normalized-dep-name",
         "normalized-pkg-name",
+        "normalized-prerelease",
     ],
 )
 def test_metadata_core_match(up_args: tuple, down_args: tuple, expected: bool) -> None:
@@ -302,19 +409,30 @@ def test_compare_identical() -> None:
 
 
 def test_compare_dist_name_normalization() -> None:
-    """Non-normalized upstream dist name should not cause a mismatch."""
+    """upstream_dist is resolved from the actual dist-info directory."""
     up_url = "https://pypi.org/InquirerPy-0.3.4-py3-none-any.whl"
     down_url = "https://rebuild.example.com/inquirerpy-0.3.4-1-py3-none-any.whl"
-    up_info = FakeInfo("InquirerPy/__init__.py", crc=123, file_size=50)
-    down_info = FakeInfo("InquirerPy/__init__.py", crc=123, file_size=50)
+    up_infos = {
+        "InquirerPy/__init__.py": FakeInfo("InquirerPy/__init__.py", crc=123, file_size=50),
+        "inquirerpy-0.3.4.dist-info/RECORD": FakeInfo(
+            "inquirerpy-0.3.4.dist-info/RECORD", crc=111, file_size=200
+        ),
+    }
+    down_infos = {
+        "InquirerPy/__init__.py": FakeInfo("InquirerPy/__init__.py", crc=123, file_size=50),
+        "inquirerpy-0.3.4.dist-info/RECORD": FakeInfo(
+            "inquirerpy-0.3.4.dist-info/RECORD", crc=111, file_size=200
+        ),
+    }
     result = _compare(
         upstream=up_url,
         downstream=down_url,
-        upstream_infos={"InquirerPy/__init__.py": up_info},
-        downstream_infos={"InquirerPy/__init__.py": down_info},
+        upstream_infos=up_infos,
+        downstream_infos=down_infos,
     )
     assert result.dist == "inquirerpy"
-    assert result.upstream_dist == "InquirerPy"
+    # upstream_dist resolved from dist-info, not from wheel filename
+    assert result.upstream_dist == "inquirerpy"
     assert result.downstream_dist == "inquirerpy"
     assert result.is_identical
 
