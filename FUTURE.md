@@ -52,28 +52,6 @@
   `triton-3.7.1` bundles the NVIDIA toolchain in
   `triton/backends/nvidia/` that downstream strips.
 
-## Extension module name matching
-
-- Handle the case where the upstream wheel uses a higher minimum
-  CPython version with free-threaded stable ABI (e.g.
-  `cp315-abi3.abi3t-manylinux_2_17_x86_64` with `.abi3t.so` extensions)
-  while the downstream rebuild targets the regular stable ABI at a
-  lower version (e.g. `cp39-abi3` with `.abi3.so` extensions).
-  Currently the resolver picks the upstream wheel by tag compatibility
-  and the comparison flags every extension module as mismatched because
-  the suffixes differ (`.abi3t.so` vs `.abi3.so`).
-  Example: `ast_serialize-0.8.0` upstream has
-  `ast_serialize.abi3t.so` (cp315-abi3.abi3t) while downstream has
-  `ast_serialize.abi3.so` (cp39-abi3) — same library, different
-  stable ABI variant.
-- Also handle the case where upstream uses stable ABI (`.abi3.so`)
-  while downstream builds a version-specific extension
-  (`.cpython-312-x86_64-linux-gnu.so`), or vice versa.  The extension
-  module is the same code linked against different ABIs.
-  Example: `pyzmq-27.2.0` upstream has `_zmq.abi3.so` (cp312-cp312)
-  while downstream has `_zmq.cpython-312-x86_64-linux-gnu.so` — same
-  module, different ABI linkage.
-
 ## Cross-case data prefix matching
 
 - When upstream and downstream use differently-cased dist names in the
