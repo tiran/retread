@@ -58,6 +58,15 @@ _SEVERITY_HEADERS = {
 _TYPE_HEADERS = ("upstream only", "downstream only", "different")
 
 
+def _print_venv_bundles(result: WheelComparison) -> None:
+    """Print bundled virtual environments, if any."""
+    if not result.venv_bundles:
+        return
+    print(f"\nBundled virtual environments ({len(result.venv_bundles)}):")
+    for b in result.venv_bundles:
+        print(f"  [{b.side}] {_severity_label(b.severity)}: {b.path}")
+
+
 def _print_comparison(result: WheelComparison) -> None:
     """Print a wheel comparison result grouped by severity."""
     print(f"Upstream:   {result.upstream_wheel}")
@@ -73,6 +82,7 @@ def _print_comparison(result: WheelComparison) -> None:
             print(f"\nPlatform warnings ({len(result.platform_warnings)}):")
             for w in result.platform_warnings:
                 print(f"  [{w.side}] {w.message}")
+        _print_venv_bundles(result)
         return
 
     # Collect items grouped by severity, then by type.
@@ -111,6 +121,8 @@ def _print_comparison(result: WheelComparison) -> None:
         print(f"\nPlatform warnings ({len(result.platform_warnings)}):")
         for w in result.platform_warnings:
             print(f"  [{w.side}] {w.message}")
+
+    _print_venv_bundles(result)
 
     if result.has_errors:
         print("\nResult: ERRORS found")
@@ -159,6 +171,10 @@ def _print_json(result: WheelComparison) -> None:
         ],
         "platform_warnings": [
             {"side": w.side, "message": w.message} for w in result.platform_warnings
+        ],
+        "venv_bundles": [
+            {"side": b.side, "severity": b.severity.value, "path": b.path}
+            for b in result.venv_bundles
         ],
     }
     json.dump(data, sys.stdout, indent=2)

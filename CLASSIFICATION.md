@@ -220,6 +220,24 @@ raised.  Large script files suggest native executables that require a
 platform-specific tag.  This check is a heuristic and may produce
 false positives for wheels with large shell scripts.
 
+## Bundled virtual environments
+
+Files under a `lib/python3.*/site-packages/` directory (for example
+`.venv/lib/python3.11/site-packages/`) indicate that a virtual
+environment was accidentally swept into the wheel during the build.
+Each distinct `site-packages/` directory is reported once as a
+**bundled virtual environment**.
+
+A bundled environment in the **upstream** wheel is a NOTICE (a
+pre-existing upstream packaging bug that the rebuild is not
+responsible for).  A bundled environment in the **downstream** rebuild
+is an ERROR, since a rebuild must not reproduce the packaging mistake.
+
+The individual files inside a bundled environment are **not** listed in
+the per-file diff (`only upstream` / `only downstream` / `different`).
+They are collapsed into this single per-environment report so the
+output is not flooded with hundreds of `site-packages/` entries.
+
 ## Example output
 
 ```
