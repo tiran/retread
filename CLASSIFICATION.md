@@ -72,6 +72,30 @@ notices.
 differ in content (compiled from source) but must be present on both
 sides.
 
+### Static libraries
+
+| Classification | Path pattern | Severity (diff) | Severity (missing) |
+|----------------|--------------|------------------|--------------------|
+| `static library` | `lib*.a` | expected | error |
+
+Static archive files (`lib*.a`) are compiled at build time and their
+content is expected to differ between builds.  A missing static library
+is an error.
+
+### Auto-generated version files
+
+| Classification | Path pattern | Severity (diff) | Severity (missing) |
+|----------------|--------------|------------------|--------------------|
+| `version file` | `_version.py`, `__version__.py`, `version.py`, `__config__.py` | notice | notice |
+
+Build tools like setuptools-scm, hatch-vcs, and versioningit auto-generate
+version files at build time.  Their content (layout, variable names,
+embedded VCS info) commonly differs between upstream and downstream builds.
+meson-python generates `__config__.py` files (used by NumPy and other
+projects) that record build-time configuration (compiler flags, library
+paths) and differ for the same reason.  These differences are always
+notices.
+
 ### Other
 
 | Classification | Meaning |
@@ -83,10 +107,15 @@ sides.
 After initial file comparison, retread reads the `METADATA` file from
 both sides and compares the following core fields:
 
-- `Name` (single-value, exact match)
+- `Name` (single-value, canonicalized per PEP 503 so that hyphens,
+  underscores, and case differences are ignored)
 - `Version` (single-value, exact match)
-- `Requires-Dist` (multi-value, compared as sorted lists)
-- `Provides-Extra` (multi-value, compared as sorted lists)
+- `Requires-Dist` (multi-value, each entry normalized via
+  `packaging.requirements.Requirement` with canonicalized distribution
+  names and compared as a set -- whitespace, quoting, name spelling
+  such as hyphens vs underscores, and order differences are ignored)
+- `Provides-Extra` (multi-value, compared as a set -- order differences
+  are ignored)
 
 If the core fields match, the METADATA diff stays at `notice` severity.
 If they differ, the severity is upgraded to `error`.  Non-core fields

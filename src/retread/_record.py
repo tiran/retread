@@ -147,8 +147,10 @@ def check_records(
     """
     mismatches: list[RecordMismatch] = []
 
-    upstream_record_path = f"{result.dist}-{result.upstream_version}.dist-info/RECORD"
-    downstream_record_path = f"{result.dist}-{result.downstream_version}.dist-info/RECORD"
+    upstream_record_path = f"{result.upstream_dist}-{result.upstream_version}.dist-info/RECORD"
+    downstream_record_path = (
+        f"{result.downstream_dist}-{result.downstream_version}.dist-info/RECORD"
+    )
 
     for side, infos, record_bytes, record_path in [
         ("upstream", upstream_infos, upstream_record, upstream_record_path),

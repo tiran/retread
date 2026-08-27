@@ -242,6 +242,19 @@ def test_abi3t_ext_with_abi3_tag():
     assert not any("abi3" in w.message for w in warnings)
 
 
+def test_abi3_ext_with_cpython_ext_no_warning():
+    """abi3 extension alongside cpython-specific extension produces no abi3 warning."""
+    infos = {
+        "foo/_bar.abi3.so": FakeInfo("foo/_bar.abi3.so"),
+        "foo/_baz.cpython-312-x86_64-linux-gnu.so": FakeInfo(
+            "foo/_baz.cpython-312-x86_64-linux-gnu.so"
+        ),
+    }
+    wheel_bytes = make_wheel_file(False, ["cp312-cp312-linux_x86_64"])
+    warnings = _check_single_wheel("upstream", infos, wheel_bytes, _LINUX_TAGS, "foo", "1.0")
+    assert not any("abi3" in w.message for w in warnings)
+
+
 def test_abi3_ext_without_cpython_interp():
     """abi3 extension without CPython interpreter produces a warning."""
     infos = {
