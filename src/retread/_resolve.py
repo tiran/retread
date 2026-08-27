@@ -103,6 +103,42 @@ def _wheels_compatible(downstream_tags: frozenset[Tag], upstream_tags: frozenset
     return False
 
 
+def _tag_match_score(downstream_tag: Tag, upstream_tag: Tag) -> int:
+    """Score how closely two individual tags match.
+
+    Higher is better:
+    - **2**: exact interpreter+abi match (e.g. ``cp312-cp312`` ↔
+      ``cp312-cp312``, or ``cp39-abi3`` ↔ ``cp39-abi3``).
+    - **1**: both abi3 with different minimum versions, or abi3 ↔
+      concrete where the concrete version >= abi3 minimum.
+    - **0**: not compatible (caller should not normally reach this).
+
+    Platform compatibility is not checked here; use
+    :func:`_tags_compatible` first.
+    """
+    if (
+        downstream_tag.interpreter == upstream_tag.interpreter
+        and downstream_tag.abi == upstream_tag.abi
+    ):
+        return 2
+    if _tags_compatible(downstream_tag, upstream_tag):
+        return 1
+    return 0
+
+
+def _best_tag_score(downstream_tags: frozenset[Tag], upstream_tags: frozenset[Tag]) -> int:
+    """Return the maximum tag-match score across all compatible tag pairs."""
+    best = 0
+    for ds_tag in downstream_tags:
+        for us_tag in upstream_tags:
+            score = _tag_match_score(ds_tag, us_tag)
+            if score > best:
+                best = score
+                if best == 2:
+                    return best
+    return best
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class WheelSpec:
     """Parsed wheel filename components.
@@ -201,6 +237,8 @@ def find_matching_wheel(
     Raises:
         WheelNotFoundError: If no matching wheel is found.
     """
+    best_pkg: DistributionPackage | None = None
+    best_score = -1
     for pkg in page.packages:
         if not pkg.filename.endswith(".whl"):
             continue
@@ -209,5 +247,12 @@ def find_matching_wheel(
         except InvalidWheelFilename:
             continue
         if name == spec.name and version == spec.version and _wheels_compatible(spec.tags, tags):
-            return pkg
+            score = _best_tag_score(spec.tags, tags)
+            if score > best_score:
+                best_score = score
+                best_pkg = pkg
+                if best_score == 2:
+                    break
+    if best_pkg is not None:
+        return best_pkg
     raise WheelNotFoundError(spec.filename, index)
