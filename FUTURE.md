@@ -14,17 +14,6 @@
   severity from NOTICE to EXPECTED since a dynamic version makes
   version file differences a guaranteed consequence of rebuilding.
 
-## Local version suffix stripping
-
-- Support comparing downstream wheels that carry a midstream or local
-  version suffix (PEP 440 `+local`), e.g.
-  `autogluon_timeseries-1.5.0+rhaiv.5`. When resolving the upstream
-  wheel, strip the local segment to find the base version (`1.5.0`)
-  on PyPI. The differing dist-info prefix
-  (`autogluon_timeseries-1.5.0+rhaiv.5.dist-info/` vs
-  `autogluon_timeseries-1.5.0.dist-info/`) should be handled the
-  same way as cross-version differences.
-
 ## Better upstream resolution errors
 
 - Distinguish between: package does not exist on the upstream index,

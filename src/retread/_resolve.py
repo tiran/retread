@@ -219,12 +219,30 @@ def _extract_raw_version(wheel_filename: str) -> str:
     return wheel_filename.removesuffix(".whl").split("-")[1]
 
 
+def _version_match(upstream: Version, downstream: Version) -> bool:
+    """Check whether an upstream version matches a downstream version.
+
+    Exact match, or if the downstream version carries a PEP 440 local
+    segment (e.g. ``1.5.0+rhaiv.5``), match the public portion so
+    that the local rebuild can find its upstream base version.
+    """
+    if upstream == downstream:
+        return True
+    # Strip local segment: 1.5.0+rhaiv.5 matches upstream 1.5.0
+    if downstream.local is not None:
+        return upstream.public == downstream.public
+    return False
+
+
 def find_matching_wheel(
     page: ProjectPage, spec: WheelSpec, index: str = ""
 ) -> DistributionPackage:
     """Find a wheel on a project page matching the given spec.
 
-    Searches for a wheel with the same name, version, and tags.
+    Searches for a wheel with the same name, version, and compatible
+    tags.  If the downstream version carries a PEP 440 local segment
+    (e.g. ``1.5.0+rhaiv.5``), the public portion is matched so that
+    the base version (``1.5.0``) is found on the upstream index.
 
     Args:
         page: A :class:`pypi_simple.ProjectPage` to search.
@@ -246,7 +264,11 @@ def find_matching_wheel(
             name, version, _build, tags = packaging.utils.parse_wheel_filename(pkg.filename)
         except InvalidWheelFilename:
             continue
-        if name == spec.name and version == spec.version and _wheels_compatible(spec.tags, tags):
+        if (
+            name == spec.name
+            and _version_match(version, spec.version)
+            and _wheels_compatible(spec.tags, tags)
+        ):
             score = _best_tag_score(spec.tags, tags)
             if score > best_score:
                 best_score = score

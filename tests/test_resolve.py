@@ -2,6 +2,7 @@
 
 import pytest
 from packaging.tags import Tag
+from packaging.version import Version
 
 from retread._errors import InvalidWheelError, WheelNotFoundError
 from retread._resolve import (
@@ -9,6 +10,7 @@ from retread._resolve import (
     _extract_arch,
     _tag_match_score,
     _tags_compatible,
+    _version_match,
     _wheels_compatible,
     find_matching_wheel,
     parse_wheel_spec,
@@ -269,3 +271,58 @@ def test_best_tag_score() -> None:
         }
     )
     assert _best_tag_score(ds_tags, us_tags) == 2
+
+
+# --- _version_match ---
+
+
+@pytest.mark.parametrize(
+    ("upstream", "downstream", "expected"),
+    [
+        ("1.0", "1.0", True),
+        ("1.0", "2.0", False),
+        ("1.5.0", "1.5.0+rhaiv.5", True),
+        ("1.5.0", "1.5.0+cpu", True),
+        ("1.5.0+cpu", "1.5.0+cpu", True),
+        ("1.5.0+cpu", "1.5.0+rhaiv.5", True),
+        ("2.0", "1.5.0+rhaiv.5", False),
+    ],
+    ids=[
+        "exact",
+        "different",
+        "local-rhaiv",
+        "local-cpu",
+        "same-local",
+        "different-local",
+        "local-wrong-base",
+    ],
+)
+def test_version_match(upstream: str, downstream: str, expected: bool) -> None:
+    assert _version_match(Version(upstream), Version(downstream)) is expected
+
+
+# --- find_matching_wheel with local version ---
+
+
+def test_find_matching_wheel_strips_local_version() -> None:
+    """Downstream with +local suffix should find upstream base version."""
+    spec = parse_wheel_spec("foo-1.5.0+rhaiv.5-1-py3-none-any.whl")
+    page = FakePage(
+        [
+            FakePkg("foo-1.5.0-py3-none-any.whl"),
+        ]
+    )
+    pkg = find_matching_wheel(page, spec, index="https://pypi.org/simple/")
+    assert pkg.filename == "foo-1.5.0-py3-none-any.whl"
+
+
+def test_find_matching_wheel_local_version_no_match() -> None:
+    """Local version with wrong base should not match."""
+    spec = parse_wheel_spec("foo-1.5.0+rhaiv.5-1-py3-none-any.whl")
+    page = FakePage(
+        [
+            FakePkg("foo-2.0-py3-none-any.whl"),
+        ]
+    )
+    with pytest.raises(WheelNotFoundError):
+        find_matching_wheel(page, spec, index="https://pypi.org/simple/")
