@@ -166,6 +166,35 @@ def _is_build_config(filename: str) -> bool:
     return filename.endswith(_BUILD_CONFIG_SUFFIXES)
 
 
+# A ``lib/python3.*/site-packages/`` path component sequence is the
+# hallmark of a virtual environment that was accidentally swept into
+# the wheel (e.g. a ``.venv/`` directory picked up by the build).
+_VENV_SITE_PACKAGES_RE = re.compile(r"(?:^|/)lib/python3\.[^/]*/site-packages/")
+
+
+def _is_bundled_venv_file(filename: str) -> bool:
+    """Return True if *filename* lives inside a bundled virtual environment."""
+    return _VENV_SITE_PACKAGES_RE.search(filename) is not None
+
+
+def _find_bundled_venvs(infos: dict[str, Any]) -> list[str]:
+    """Find bundled virtual environments inside a wheel.
+
+    Scans *infos* for files under a ``lib/python3.*/site-packages/``
+    directory, which indicates a virtual environment was packaged into
+    the wheel by mistake.
+
+    Returns a sorted list of the distinct ``.../site-packages/``
+    directory prefixes found (one per bundled environment).
+    """
+    prefixes: set[str] = set()
+    for fname in infos:
+        m = _VENV_SITE_PACKAGES_RE.search(fname)
+        if m is not None:
+            prefixes.add(fname[: m.end()])
+    return sorted(prefixes)
+
+
 def _extension_stem(filename: str) -> str | None:
     """Extract the module stem from an extension module filename.
 
@@ -423,6 +452,22 @@ class FileDiff:
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
+class VenvBundle:
+    """A virtual environment accidentally bundled into a wheel.
+
+    A wheel should never contain a virtual environment.  Files under a
+    ``lib/python3.*/site-packages/`` directory indicate a ``.venv`` or
+    similar directory was swept into the build.  Bundling one upstream
+    is a NOTICE (a pre-existing upstream packaging bug); reproducing it
+    downstream is an ERROR.
+    """
+
+    side: str  # "upstream" or "downstream"
+    severity: Severity
+    path: str  # the site-packages directory prefix
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
 class WheelComparison:
     """Result of comparing an upstream wheel to a downstream rebuild.
 
@@ -455,6 +500,7 @@ class WheelComparison:
     identical: tuple[str, ...]
     record_mismatches: tuple[RecordMismatch, ...] = ()
     platform_warnings: tuple[PlatformWarning, ...] = ()
+    venv_bundles: tuple[VenvBundle, ...] = ()
     upstream_dist: str = ""
     downstream_dist: str = ""
 
@@ -466,8 +512,18 @@ class WheelComparison:
 
     @property
     def is_identical(self) -> bool:
-        """Return True if the wheels are identical."""
-        return not self.only_upstream and not self.only_downstream and not self.different
+        """Return True if the wheels are identical.
+
+        Bundled virtual environment files are excluded from the per-file
+        diff (see :attr:`venv_bundles`), so their presence is checked
+        here instead: a venv bundled on only one side means the wheels
+        differ.
+        """
+        if self.only_upstream or self.only_downstream or self.different:
+            return False
+        up_venvs = {b.path for b in self.venv_bundles if b.side == "upstream"}
+        down_venvs = {b.path for b in self.venv_bundles if b.side == "downstream"}
+        return up_venvs == down_venvs
 
     @property
     def has_errors(self) -> bool:
@@ -478,7 +534,31 @@ class WheelComparison:
             or any(diff.severity is Severity.ERROR for diff in self.different)
             or bool(self.record_mismatches)
             or bool(self.platform_warnings)
+            or any(bundle.severity is Severity.ERROR for bundle in self.venv_bundles)
         )
+
+
+def _detect_venv_bundles(
+    upstream_infos: dict[str, Any],
+    downstream_infos: dict[str, Any],
+) -> tuple[VenvBundle, ...]:
+    """Detect virtual environments accidentally bundled into either wheel.
+
+    Files under a ``lib/python3.*/site-packages/`` directory indicate a
+    virtual environment was packaged into the wheel by mistake.  This is
+    a NOTICE for the upstream wheel (a pre-existing upstream packaging
+    bug) and an ERROR for the downstream rebuild, which must not
+    reproduce the mistake.
+    """
+    bundles: list[VenvBundle] = []
+    for side, infos, severity in (
+        ("upstream", upstream_infos, Severity.NOTICE),
+        ("downstream", downstream_infos, Severity.ERROR),
+    ):
+        for path in _find_bundled_venvs(infos):
+            logger.info("bundled venv [%s]: %s", side, path)
+            bundles.append(VenvBundle(side=side, severity=severity, path=path))
+    return tuple(bundles)
 
 
 def _read_record(
@@ -681,8 +761,13 @@ def _compare(
         )
     up_dist = _find_dist_info_name(upstream_infos, up_dist, upstream_ver_str)
     down_dist = _find_dist_info_name(downstream_infos, down_dist, downstream_ver_str)
-    upstream_names = set(upstream_infos)
-    downstream_names = set(downstream_infos)
+    # Detect virtual environments accidentally bundled into either wheel
+    # and drop their files from the name sets: they are collapsed into a
+    # single per-environment entry (see VenvBundle) instead of flooding
+    # the per-file diff with hundreds of individual site-packages files.
+    venv_bundles = _detect_venv_bundles(upstream_infos, downstream_infos)
+    upstream_names = {n for n in upstream_infos if not _is_bundled_venv_file(n)}
+    downstream_names = {n for n in downstream_infos if not _is_bundled_venv_file(n)}
 
     only_upstream = sorted(upstream_names - downstream_names)
     only_downstream = sorted(downstream_names - upstream_names)
@@ -766,6 +851,7 @@ def _compare(
         only_downstream=tuple(_make_downstream_entry(fname) for fname in only_downstream),
         different=tuple(different),
         identical=tuple(identical),
+        venv_bundles=venv_bundles,
     )
 
 

@@ -59,17 +59,6 @@
   portion from the filename.
   Affects: `bqscales`, `jupyter_leaflet`.
 
-## Detect bundled virtual environments
-
-- Detect files matching `**/lib/python3.*/site-packages/` inside
-  wheels.  This pattern indicates a virtual environment was
-  accidentally bundled into the wheel.
-  Example: `nemoguardrails-0.21.0` upstream includes
-  `.venv/lib/python3.11/site-packages/` with pip and other installed
-  packages.
-- Report as a warning for upstream wheels and an error for downstream
-  wheels (a rebuild should not reproduce this packaging mistake).
-
 ## Detect native executables in data scripts [low]
 
 - Consider checking file magic bytes or shebangs to distinguish
