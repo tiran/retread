@@ -30,7 +30,12 @@ logger = logging.getLogger(__name__)
 _CPYTHON_EXT_RE = re.compile(r"\.cpython-(\d+\w?)-(.+)\.so$")
 _SHARED_LIB_RE = re.compile(r"\.so(\.[0-9.]+)?$")
 
-_LARGE_SCRIPT_THRESHOLD = 8192
+# Threshold for the large scripts heuristic.  Files in data/scripts/
+# above this size suggest native executables rather than interpreted
+# scripts.  64 KiB avoids false positives for large Python scripts
+# like pdfminer.six pdf2txt.py (~30 KiB), pyelftools readelf.py
+# (~23 KiB), and xlrd runxlrd.py (~14 KiB).
+_LARGE_SCRIPT_THRESHOLD = 65536
 
 
 @dataclasses.dataclass(frozen=True, slots=True)

@@ -323,7 +323,7 @@ def test_large_scripts_heuristic():
     """Large files in data/scripts/ with purelib produces a heuristic warning."""
     infos = {
         "foo/__init__.py": FakeInfo("foo/__init__.py"),
-        "foo-1.0.data/scripts/mybin": FakeInfo("foo-1.0.data/scripts/mybin", file_size=16384),
+        "foo-1.0.data/scripts/mybin": FakeInfo("foo-1.0.data/scripts/mybin", file_size=131072),
     }
     wheel_bytes = make_wheel_file(True, ["py3-none-any"])
     warnings = _check_single_wheel("upstream", infos, wheel_bytes, _PURE_TAGS, "foo", "1.0")
