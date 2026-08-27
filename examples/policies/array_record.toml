@@ -1,0 +1,7 @@
+# Upstream ships setup.py inside the wheel by mistake (an upstream
+# packaging bug); downstream drops it.
+["*"]
+description = "Upstream bug: setup.py bundled in the wheel is dropped downstream"
+ignore_missing_downstream = [
+    "array_record/setup.py",
+]

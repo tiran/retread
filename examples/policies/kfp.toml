@@ -1,0 +1,4 @@
+# Downstream relaxes the pinned kubernetes dependency version constraint.
+["*"]
+description = "Downstream relaxes the kubernetes dependency constraint"
+ignore_dependency_metadata = true

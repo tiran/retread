@@ -1,0 +1,8 @@
+# pytest_resourceleaks.py is excluded from the sdist via MANIFEST.in
+# (https://github.com/dask/distributed/blob/main/MANIFEST.in), so the
+# downstream rebuild from sdist does not contain it.
+["*"]
+description = "Downstream sdist excludes pytest_resourceleaks.py per MANIFEST.in"
+ignore_missing_downstream = [
+    "distributed/pytest_resourceleaks.py",
+]

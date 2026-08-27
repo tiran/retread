@@ -1,0 +1,13 @@
+# Upstream bundles shared libraries (libcrypt, libcrypto, libssl,
+# libpcre) alongside the haproxy binary.  Downstream links against
+# system libraries and strips the bundled copies, so the haproxy
+# binary itself is rebuilt and differs.
+["*"]
+description = "Downstream links haproxy against system libraries instead of bundled ones"
+platlib = true
+ignore_differences = [
+    "ray_haproxy/bin/haproxy",
+]
+ignore_missing_downstream = [
+    "ray_haproxy/bin/lib/*",
+]

@@ -23,24 +23,18 @@
   platform/ABI tags). Currently all three cases raise the same
   `WheelNotFoundError`.
 
-## Per-package policy configuration
+## Per-package policy extensions
 
-- Support external configuration files that define per-package
-  policies for expected differences.  Some packages have
-  package-specific patterns that retread cannot handle with generic
-  rules (bundled native binaries, vendored C headers, stripped data
-  files, etc.).  A policy file could specify:
-  - File glob patterns to ignore or reclassify (e.g.
-    `cmake/data/bin/*` as EXPECTED, `lxml/includes/**/*.h` as NOTICE).
-  - Expected missing files or directories per package.
-  - Custom severity overrides for specific classifications.
-- This would replace the need for many package-specific heuristics
-  in retread's core logic.
-  Examples: `cmake-4.4.2` bundles native executables in
-  `cmake/data/bin/`; `lxml` bundles C headers in `lxml/includes/`
-  that downstream strips when building against system libraries;
-  `triton-3.7.1` bundles the NVIDIA toolchain in
-  `triton/backends/nvidia/` that downstream strips.
+- Add ``**`` recursive glob support to policy patterns using
+  ``PurePosixPath.full_match()`` (Python 3.13+).
+- Support version-range selectors (e.g. ``">=4.0,<5.0"``) in
+  policy files using ``packaging.specifiers.SpecifierSet``.
+- Allow specifying expected dependency-metadata differences instead of
+  the all-or-nothing ``ignore_dependency_metadata`` boolean.  For
+  example, glob or requirement patterns matched against individual
+  ``Requires-Dist`` / ``Provides-Extra`` entries, so an accidentally
+  dropped *required* dependency is still surfaced while known
+  downstream adjustments are accepted.
 
 ## Flag .pth files as a warning
 
@@ -59,6 +53,19 @@
   missing rather than pairing them.  Match files by stripping the hash
   portion from the filename.
   Affects: `bqscales`, `jupyter_leaflet`.
+- Related: labextension `package.json` files embed a build hash and
+  differ between rebuilds even when the paired bundle is unchanged;
+  these should be treated as an expected difference too.
+  Affects: `jupyter_leaflet`.
+
+## Classify stray VCS files
+
+- Files like `.gitignore`, `.gitattributes`, and `.keep` are
+  occasionally shipped in an upstream wheel but dropped by the
+  downstream build.  Add a built-in retread rule to classify these as
+  a NOTICE (or ignore missing) rather than an error, instead of
+  requiring a per-package policy.
+  Affects: `chromadb` (`chromadb/proto/.gitignore`).
 
 ## Detect native executables in data scripts [low]
 

@@ -1,0 +1,8 @@
+# Downstream strips the vendored libsndfile and associated files.
+# Downstream links against the system-provided libsndfile.
+["*"]
+description = "Downstream links against system-provided libsndfile"
+ignore_missing_downstream = [
+    "_soundfile_data/*",
+    "licensing/*",
+]

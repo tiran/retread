@@ -189,8 +189,14 @@ def test_print_json_metadata_field_diffs(capsys) -> None:
             "field": "Requires-Dist",
             "only_upstream": ["bar>=1.0"],
             "only_downstream": ["bar>=2.0"],
+            "ignored": False,
         },
-        {"field": "Provides-Extra", "only_upstream": ["docs"], "only_downstream": []},
+        {
+            "field": "Provides-Extra",
+            "only_upstream": ["docs"],
+            "only_downstream": [],
+            "ignored": False,
+        },
     ]
 
 

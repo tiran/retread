@@ -1,0 +1,11 @@
+# wandb ships native Go binaries (wandb-core, gpu_stats) that
+# are rebuilt downstream against system libraries.
+["*"]
+description = "Downstream rebuilds native Go binaries against system libraries"
+platlib = true
+ignore_differences = [
+    "wandb/bin/wandb-core",
+]
+ignore_missing_downstream = [
+    "wandb/bin/gpu_stats",
+]

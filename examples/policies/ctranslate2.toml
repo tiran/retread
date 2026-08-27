@@ -1,0 +1,7 @@
+# Downstream builds libctranslate2 from source and bundles the shared
+# library directly inside the package instead of an auditwheel directory.
+["*"]
+description = "Downstream bundles libctranslate2 in the package instead of an auditwheel directory"
+ignore_extra_downstream = [
+    "ctranslate2/libctranslate2.so*",
+]

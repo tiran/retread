@@ -1,0 +1,5 @@
+# Downstream builds torch without the bundled CUDA and Triton runtime
+# dependencies, so those dependency entries differ.
+["*"]
+description = "Downstream build omits CUDA/Triton runtime dependencies"
+ignore_dependency_metadata = true

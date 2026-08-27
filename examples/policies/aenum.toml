@@ -1,0 +1,7 @@
+# Downstream strips the in-package test modules that upstream ships
+# alongside the library.
+["*"]
+description = "Downstream strips the bundled test modules"
+ignore_missing_downstream = [
+    "aenum/test_*.py",
+]

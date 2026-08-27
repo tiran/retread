@@ -1,0 +1,4 @@
+# Downstream builds yfinance without the curl-cffi dependency.
+["*"]
+description = "Downstream drops the curl-cffi dependency"
+ignore_dependency_metadata = true

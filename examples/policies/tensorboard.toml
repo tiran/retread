@@ -1,0 +1,8 @@
+# Downstream rebuilds the web frontend from source, so the bundled
+# JavaScript assets differ from the upstream wheel.
+["*"]
+description = "Rebuilt web frontend assets differ"
+ignore_differences = [
+    "tensorboard/plugins/projector/tf_projector_plugin/projector_binary.js",
+    "tensorboard/webfiles.zip",
+]

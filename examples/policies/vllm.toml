@@ -1,0 +1,31 @@
+# Downstream is a CPU-only build.  The upstream wheel is a GPU (CUDA) build,
+# so its compiled GPU extension modules and the vendored GPU source trees they
+# are built from are absent downstream, while the CPU build adds AVX2/AVX512
+# core variants.  Only the CPU-vs-GPU build difference is ignored here;
+# remaining content differences are left visible for review.
+["*"]
+description = "Downstream is a CPU-only build without GPU extensions"
+# Downstream fork also adjusts declared dependency version bounds and extras.
+ignore_dependency_metadata = true
+ignore_extra_downstream = [
+    "vllm/_C.abi3.so",
+    "vllm/_C_AVX2.abi3.so",
+    "vllm/_C_AVX512.abi3.so",
+]
+ignore_missing_downstream = [
+    # Upstream GPU core / kernel extension modules
+    "vllm/_C_stable_libtorch.abi3.so",
+    "vllm/_moe_C_stable_libtorch.abi3.so",
+    "vllm/_flashmla_C.abi3.so",
+    "vllm/_flashmla_extension_C.abi3.so",
+    "vllm/_qutlass_C.abi3.so",
+    "vllm/cumem_allocator.abi3.so",
+    # Flash-attention package (compiled + Python sources), GPU-only
+    "vllm/vllm_flash_attn/*",
+    # Vendored GPU source trees built only in the GPU variant
+    "vllm/third_party/deep_gemm/*",
+    "vllm/third_party/flashmla/*",
+    "vllm/third_party/fmha_sm100/*",
+    "vllm/third_party/tml_fa4/*",
+    "vllm/third_party/triton_kernels/*",
+]

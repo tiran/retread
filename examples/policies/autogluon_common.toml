@@ -1,0 +1,7 @@
+# Downstream syncs the monorepo version at build time, so the embedded
+# version string in utils.py differs from the upstream wheel.
+["*"]
+description = "Embedded build-time version metadata in utils.py differs"
+ignore_differences = [
+    "autogluon/common/utils/utils.py",
+]

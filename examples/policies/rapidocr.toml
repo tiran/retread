@@ -1,0 +1,10 @@
+# Downstream bundles a different set of pre-downloaded OCR model files, so
+# some models bundled in the upstream wheel (and a placeholder) are absent.
+["*"]
+description = "Downstream bundles a different set of pre-downloaded OCR models"
+ignore_missing_downstream = [
+    "rapidocr/models/.gitkeep",
+    "rapidocr/models/PP-OCRv6_det_small.onnx",
+    "rapidocr/models/PP-OCRv6_rec_small.onnx",
+    "rapidocr/models/ch_ppocr_mobile_v2.0_cls_mobile.onnx",
+]

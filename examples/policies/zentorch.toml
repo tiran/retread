@@ -1,0 +1,10 @@
+# Downstream adds a vLLM integration subpackage that upstream does not ship,
+# and the embedded build info records a different source revision.
+["*"]
+description = "Downstream adds a vLLM integration subpackage; embedded build info differs"
+ignore_extra_downstream = [
+    "zentorch/vllm/*",
+]
+ignore_differences = [
+    "zentorch/_build_info.py",
+]

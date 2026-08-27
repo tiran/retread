@@ -1,0 +1,9 @@
+# Downstream builds against system GDAL/GEOS/PROJ and strips
+# the bundled data files, cmake configs, and abi3 extensions
+# (downstream builds cpython-tagged extensions instead).
+["*"]
+description = "Downstream uses system-installed GDAL/GEOS/PROJ"
+ignore_missing_downstream = [
+    "pyogrio/gdal_data/*",
+    "pyogrio/proj_data/*",
+]

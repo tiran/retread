@@ -42,6 +42,7 @@ class Severity(enum.Enum):
     EXPECTED = "expected"
     NOTICE = "notice"
     ERROR = "error"
+    IGNORED = "ignored"
 
 
 class Classification(enum.Enum):
@@ -480,6 +481,7 @@ class MetadataFieldDiff:
     field: str  # e.g. "Requires-Dist" or "Provides-Extra"
     only_upstream: tuple[str, ...]
     only_downstream: tuple[str, ...]
+    ignored: bool = False  # accepted by policy; reported but not an error
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -611,6 +613,7 @@ class WheelComparison:
                     "field": d.field,
                     "only_upstream": list(d.only_upstream),
                     "only_downstream": list(d.only_downstream),
+                    "ignored": d.ignored,
                 }
                 for d in self.metadata_field_diffs
             ],

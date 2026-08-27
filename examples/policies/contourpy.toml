@@ -1,0 +1,8 @@
+# meson-python records build-time configuration (interpreter path,
+# install prefix) in contourpy/util/_build_config.py.  These paths
+# differ between the upstream and downstream build environments.
+["*"]
+description = "Downstream build environment records different paths in _build_config.py"
+ignore_differences = [
+    "contourpy/util/_build_config.py",
+]
