@@ -181,6 +181,19 @@ ERROR = Severity.ERROR
         ("foo/version.py", False, NOTICE, Classification.VERSION_FILE),
         ("foo/sub/__version__.py", False, NOTICE, Classification.VERSION_FILE),
         ("numpy/__config__.py", False, NOTICE, Classification.VERSION_FILE),
+        # namespace package .pth files (always NOTICE)
+        (
+            "sphinxcontrib_jsmath-1.0.1-py3.7-nspkg.pth",
+            False,
+            NOTICE,
+            Classification.NAMESPACE_PKG_PTH,
+        ),
+        (
+            "sphinxcontrib_jsmath-1.0.1-py3.12-nspkg.pth",
+            True,
+            NOTICE,
+            Classification.NAMESPACE_PKG_PTH,
+        ),
         # other (always ERROR)
         ("foo/data.json", False, ERROR, Classification.OTHER),
         ("foo/data.json", True, ERROR, Classification.OTHER),
@@ -210,6 +223,8 @@ ERROR = Severity.ERROR
         "version-file-alt",
         "version-file-nested",
         "version-file-config",
+        "nspkg-pth-diff",
+        "nspkg-pth-missing",
         "other-diff",
         "other-missing",
         "wrong-dist-name",

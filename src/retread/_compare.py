@@ -57,6 +57,7 @@ class Classification(enum.Enum):
     EXTENSION_MODULE = "extension module"
     STATIC_LIBRARY = "static library"
     VERSION_FILE = "version file"
+    NAMESPACE_PKG_PTH = "namespace pkg pth"
     OTHER = "other"
 
 
@@ -202,6 +203,11 @@ def _classify_file(
         return Severity.EXPECTED, Classification.STATIC_LIBRARY
     if _is_version_file(filename):
         return Severity.NOTICE, Classification.VERSION_FILE
+    # Legacy namespace package .pth files (superseded by PEP 420
+    # implicit namespace packages).  The filename embeds the build-time
+    # Python version, so it always differs between upstream and rebuild.
+    if filename.endswith("-nspkg.pth"):
+        return Severity.NOTICE, Classification.NAMESPACE_PKG_PTH
     return Severity.ERROR, Classification.OTHER
 
 

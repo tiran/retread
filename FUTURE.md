@@ -110,13 +110,13 @@
   `py2-none-any` and `py3-none-any`.
   Affects: `pysnow`.
 
-## Namespace package .pth files
+## Flag .pth files as a warning
 
-- Namespace package `.pth` files embed the build-time Python version
-  in their filename (e.g. `sphinxcontrib_jsmath-1.0.1-py3.7-nspkg.pth`
-  vs `py3.12-nspkg.pth`).  These should be matched by stripping the
-  Python version from the filename, or classified as NOTICE.
-  Affects: `sphinxcontrib_jsmath`.
+- `.pth` files (other than namespace package `-nspkg.pth`) can execute
+  arbitrary code at interpreter startup.  Wheels containing `.pth`
+  files should be flagged with a warning since they can be abused for
+  code injection.  Namespace `-nspkg.pth` files are already classified
+  as NOTICE and are not affected.
 
 ## Match content-hashed filenames in data directories
 
