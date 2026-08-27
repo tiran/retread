@@ -378,6 +378,18 @@ def test_compare_resolves_dist_info_case_mismatch() -> None:
             ("foo", "1.0", ["furo (>=2021.8.17b43,<2022.0.0)"]),
             True,
         ),
+        # wildcard version specifier (==2.0.*)
+        (
+            ("foo", "1.0", ["bar==2.0.*"]),
+            ("foo", "1.0", ["bar==2.0.*"]),
+            True,
+        ),
+        # wildcard combined with normal specifier
+        (
+            ("foo", "1.0", ["bar (>=1.0,!=0.41.*)"]),
+            ("foo", "1.0", ["bar>=1.0,!=0.41.*"]),
+            True,
+        ),
     ],
     ids=[
         "identical",
@@ -390,6 +402,8 @@ def test_compare_resolves_dist_info_case_mismatch() -> None:
         "normalized-dep-name",
         "normalized-pkg-name",
         "normalized-prerelease",
+        "wildcard-version",
+        "wildcard-combined",
     ],
 )
 def test_metadata_core_match(up_args: tuple, down_args: tuple, expected: bool) -> None:
