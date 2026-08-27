@@ -112,7 +112,13 @@ def _is_test_file(filename: str) -> bool:
 
 _PROTOBUF_SUFFIXES = ("_pb2.py", "_pb2_grpc.py", "_pb2.pyi", "_pb2_grpc.pyi")
 _ANTLR_SUFFIXES = ("Lexer.py", "Parser.py", "ParserListener.py", "ParserVisitor.py")
-_C_SOURCE_SUFFIXES = (".c", ".cpp", ".h", ".hpp", ".inc")
+# C/C++ source and header file suffixes:
+#   .c, .cpp     - C/C++ source (often Cython-generated)
+#   .h, .hpp     - C/C++ headers
+#   .inc         - textual includes (MLIR TableGen, protobuf)
+#   .inl         - C++ inline implementation headers
+#   .cuh         - CUDA C++ headers
+_C_SOURCE_SUFFIXES = (".c", ".cpp", ".cuh", ".h", ".hpp", ".inc", ".inl")
 _BUILD_CONFIG_SUFFIXES = (".cmake", ".pc")
 
 
