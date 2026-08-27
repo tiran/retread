@@ -56,6 +56,7 @@ class Classification(enum.Enum):
     DATA_SCRIPTS = "data scripts"
     EXTENSION_MODULE = "extension module"
     STATIC_LIBRARY = "static library"
+    JAR = "jar"
     VERSION_FILE = "version file"
     NAMESPACE_PKG_PTH = "namespace pkg pth"
     GENERATED_PROTOBUF = "generated protobuf"
@@ -355,6 +356,11 @@ def _classify_file(
         if missing:
             return Severity.ERROR, Classification.STATIC_LIBRARY
         return Severity.EXPECTED, Classification.STATIC_LIBRARY
+    # Java archives (.jar)
+    if filename.endswith(".jar"):
+        if missing:
+            return Severity.ERROR, Classification.JAR
+        return Severity.EXPECTED, Classification.JAR
     if _is_version_file(filename):
         return Severity.NOTICE, Classification.VERSION_FILE
     # Legacy namespace package .pth files (superseded by PEP 420
