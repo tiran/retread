@@ -221,6 +221,10 @@ ERROR = Severity.ERROR
         ("foo/bar.cpp", False, NOTICE, Classification.GENERATED_C),
         ("foo/bar.h", False, NOTICE, Classification.GENERATED_C),
         ("foo/bar.hpp", True, NOTICE, Classification.GENERATED_C),
+        # build configuration files (always NOTICE)
+        ("foo/FooConfig.cmake", False, NOTICE, Classification.GENERATED_BUILD_CONFIG),
+        ("foo/FooConfig.cmake", True, NOTICE, Classification.GENERATED_BUILD_CONFIG),
+        ("foo/libs/tbb.pc", False, NOTICE, Classification.GENERATED_BUILD_CONFIG),
         # other (always ERROR)
         ("foo/data.json", False, ERROR, Classification.OTHER),
         ("foo/data.json", True, ERROR, Classification.OTHER),
@@ -273,6 +277,9 @@ ERROR = Severity.ERROR
         "generated-cpp",
         "generated-h",
         "generated-hpp",
+        "build-config-cmake-diff",
+        "build-config-cmake-missing",
+        "build-config-pc",
         "other-diff",
         "other-missing",
         "wrong-dist-name",
