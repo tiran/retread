@@ -6,8 +6,6 @@ import pytest
 from packaging.version import Version
 
 from retread.__main__ import (
-    _diff_to_dict,
-    _entry_to_dict,
     _format_label,
     _print_comparison,
     _print_json,
@@ -30,31 +28,6 @@ from retread._compare import (
 )
 def test_format_label(classification: Classification, expected: str) -> None:
     assert _format_label(classification) == expected
-
-
-# --- _entry_to_dict / _diff_to_dict ---
-
-
-def test_entry_to_dict() -> None:
-    entry = FileEntry("foo.py", Severity.ERROR, Classification.OTHER)
-    assert _entry_to_dict(entry, "upstream") == {
-        "filename": "foo.py",
-        "side": "upstream",
-        "severity": "error",
-        "classification": "other",
-    }
-
-
-def test_diff_to_dict() -> None:
-    diff = FileDiff(
-        "foo.so", 100, 200, 111, 222, Severity.EXPECTED, Classification.EXTENSION_MODULE
-    )
-    d = _diff_to_dict(diff)
-    assert d["filename"] == "foo.so"
-    assert d["upstream_size"] == 100
-    assert d["downstream_size"] == 200
-    assert d["severity"] == "expected"
-    assert d["classification"] == "extension module"
 
 
 # --- _print_comparison ---

@@ -1,5 +1,6 @@
 """Tests for retread._compare."""
 
+import json
 import zipfile
 
 import pytest
@@ -8,7 +9,9 @@ from packaging.version import Version
 from retread._compare import (
     Classification,
     FileDiff,
+    FileEntry,
     Severity,
+    VenvBundle,
     WheelComparison,
     _check_metadata,
     _classify_file,
@@ -882,3 +885,53 @@ def test_compare_wheels_no_record_mismatches() -> None:
     )
     result = compare_wheels(upstream, downstream)
     assert result.record_mismatches == ()
+
+
+# --- WheelComparison.to_dict ---
+
+
+def test_to_dict() -> None:
+    result = WheelComparison(
+        upstream="up",
+        downstream="down",
+        upstream_wheel="foo-1.0-py3-none-any.whl",
+        downstream_wheel="foo-1.0-py3-none-any.whl",
+        dist="foo",
+        upstream_version=Version("1.0"),
+        downstream_version=Version("1.0"),
+        only_upstream=(FileEntry("gone.py", Severity.ERROR, Classification.OTHER),),
+        only_downstream=(),
+        different=(
+            FileDiff(
+                "foo.so", 100, 200, 111, 222, Severity.EXPECTED, Classification.EXTENSION_MODULE
+            ),
+        ),
+        identical=("foo/__init__.py",),
+        venv_bundles=(
+            VenvBundle("downstream", Severity.ERROR, ".venv/lib/python3.11/site-packages/"),
+        ),
+    )
+    data = result.to_dict()
+    assert data["upstream_wheel"] == "foo-1.0-py3-none-any.whl"
+    assert data["is_identical"] is False
+    assert data["has_errors"] is True
+    assert data["only_upstream"] == [
+        {
+            "filename": "gone.py",
+            "side": "upstream",
+            "severity": "error",
+            "classification": "other",
+        }
+    ]
+    assert data["different"][0]["filename"] == "foo.so"
+    assert data["different"][0]["classification"] == "extension module"
+    assert data["identical"] == ["foo/__init__.py"]
+    assert data["venv_bundles"] == [
+        {
+            "side": "downstream",
+            "severity": "error",
+            "path": ".venv/lib/python3.11/site-packages/",
+        }
+    ]
+    # The result must be JSON-serializable.
+    assert json.loads(json.dumps(data)) == data
