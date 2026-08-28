@@ -466,6 +466,18 @@ def test_compare_resolves_dist_info_case_mismatch() -> None:
             ("foo", "1.0", [], ["code-syntax-highlighting"]),
             True,
         ),
+        # compatible-release specifier (~=22.0) must not be stripped to ~=22
+        (
+            ("foo", "1.0", ["bar~=22.0"]),
+            ("foo", "1.0", ["bar ~= 22.0"]),
+            True,
+        ),
+        # arbitrary-equality specifier (===1.0) must keep its trailing zero
+        (
+            ("foo", "1.0", ["bar===1.0"]),
+            ("foo", "1.0", ["bar===1"]),
+            False,
+        ),
     ],
     ids=[
         "identical",
@@ -484,6 +496,8 @@ def test_compare_resolves_dist_info_case_mismatch() -> None:
         "local-version-different-base",
         "normalized-version-spec",
         "normalized-extra-name",
+        "compatible-release-spec",
+        "arbitrary-equality-spec",
     ],
 )
 def test_metadata_core_match(up_args: tuple, down_args: tuple, expected: bool) -> None:

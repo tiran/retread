@@ -934,16 +934,26 @@ def _compare(
     )
 
 
-def _normalize_version_spec(spec: str) -> str:
+# Operators for which trailing-zero stripping is unsafe.  ``~=`` (compatible
+# release) requires at least two release segments, so stripping ``~=22.0`` to
+# ``~=22`` produces an invalid specifier.  ``===`` (arbitrary equality) matches
+# the version string verbatim, so stripping would change its meaning.
+_NO_STRIP_OPERATORS = frozenset({"~=", "==="})
+
+
+def _normalize_version_spec(spec: str, operator: str | None = None) -> str:
     """Normalize a single version string, keeping wildcards unchanged.
 
-    Uses :func:`packaging.utils.canonicalize_version`, which strips
-    trailing-zero release segments so that equivalent spellings like
-    ``5`` and ``5.0`` compare equal.  PEP 440 wildcard specifiers
-    (e.g. ``2.0.*``, ``0.41.*``) that cannot be parsed as versions are
-    returned unchanged.
+    Uses :func:`packaging.utils.canonicalize_version`.  Trailing-zero
+    release segments are stripped so that equivalent spellings like ``5``
+    and ``5.0`` compare equal, but only when *operator* is supplied and
+    is not one of ``~=`` or ``===`` (where stripping would produce an
+    invalid or semantically different specifier).  PEP 440 wildcard
+    specifiers (e.g. ``2.0.*``, ``0.41.*``) that cannot be parsed as
+    versions are returned unchanged.
     """
-    return packaging.utils.canonicalize_version(spec, strip_trailing_zero=True)
+    strip = operator is not None and operator not in _NO_STRIP_OPERATORS
+    return packaging.utils.canonicalize_version(spec, strip_trailing_zero=strip)
 
 
 def _normalize_req(raw: str) -> str:
@@ -952,15 +962,18 @@ def _normalize_req(raw: str) -> str:
     Uses ``Requirement`` to normalize whitespace, quoting, and marker
     formatting, then canonicalizes the distribution name so that
     ``typing-extensions`` and ``typing_extensions`` compare equal.
-    Version specifiers are normalized through ``Version`` so that
-    PEP 440 equivalent spellings like ``2021.8.17-beta.43`` and
-    ``2021.8.17b43`` compare equal.  Wildcard versions (``==2.0.*``)
-    are kept as-is.
+    Version specifiers are normalized so that PEP 440 equivalent
+    spellings like ``<5`` and ``<5.0`` compare equal.  Trailing-zero
+    stripping is skipped for the ``~=`` and ``===`` operators, where it
+    would produce an invalid or semantically different specifier.
+    Wildcard versions (``==2.0.*``) are kept as-is.
     """
     req = Requirement(raw)
     req.name = packaging.utils.canonicalize_name(req.name)
     req.specifier = SpecifierSet(
-        ",".join(f"{s.operator}{_normalize_version_spec(s.version)}" for s in req.specifier)
+        ",".join(
+            f"{s.operator}{_normalize_version_spec(s.version, s.operator)}" for s in req.specifier
+        )
     )
     return str(req)
 
