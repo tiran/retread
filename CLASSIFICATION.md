@@ -112,10 +112,14 @@ both sides and compares the following core fields:
 - `Version` (single-value, exact match)
 - `Requires-Dist` (multi-value, each entry normalized via
   `packaging.requirements.Requirement` with canonicalized distribution
-  names and compared as a set -- whitespace, quoting, name spelling
-  such as hyphens vs underscores, and order differences are ignored)
-- `Provides-Extra` (multi-value, compared as a set -- order differences
-  are ignored)
+  names and version specifiers normalized via
+  `packaging.utils.canonicalize_version` so that equivalent spellings
+  like `<5` and `<5.0` compare equal; compared as a set -- whitespace,
+  quoting, name spelling such as hyphens vs underscores, and order
+  differences are ignored)
+- `Provides-Extra` (multi-value, each name canonicalized per PEP 685 so
+  that `code_syntax_highlighting` and `code-syntax-highlighting` compare
+  equal; compared as a set -- order differences are ignored)
 
 If the core fields match, the METADATA diff stays at `notice` severity.
 If they differ, the severity is upgraded to `error`.  Non-core fields
@@ -133,7 +137,8 @@ retread reports the normalized entries present on only one side as
 **metadata field differences** (`metadata_field_diffs` in the result
 and JSON output).  Entries are normalized before comparison, so
 cosmetic differences (whitespace, quoting, dependency name spelling,
-ordering) are not reported -- only genuine additions or removals.  This
+version spelling, extra name spelling, ordering) are not reported --
+only genuine additions or removals.  This
 pinpoints *which* requirements or extras changed rather than merely
 flagging that METADATA differs.
 
