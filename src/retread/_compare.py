@@ -22,7 +22,7 @@ import packaging.utils
 from packaging.metadata import parse_email
 from packaging.requirements import Requirement
 from packaging.specifiers import SpecifierSet
-from packaging.version import InvalidVersion, Version
+from packaging.version import Version
 
 from retread._errors import InvalidWheelError
 from retread._platform import PlatformWarning, check_platform_abi
@@ -937,14 +937,13 @@ def _compare(
 def _normalize_version_spec(spec: str) -> str:
     """Normalize a single version string, keeping wildcards unchanged.
 
-    PEP 440 wildcard specifiers (e.g. ``==2.0.*``, ``!=0.41.*``) are
-    valid in ``Requires-Dist`` but cannot be parsed as ``Version``
-    objects.  Fall back to the original string in that case.
+    Uses :func:`packaging.utils.canonicalize_version`, which strips
+    trailing-zero release segments so that equivalent spellings like
+    ``5`` and ``5.0`` compare equal.  PEP 440 wildcard specifiers
+    (e.g. ``2.0.*``, ``0.41.*``) that cannot be parsed as versions are
+    returned unchanged.
     """
-    try:
-        return str(Version(spec))
-    except InvalidVersion:
-        return spec
+    return packaging.utils.canonicalize_version(spec, strip_trailing_zero=True)
 
 
 def _normalize_req(raw: str) -> str:
@@ -966,14 +965,25 @@ def _normalize_req(raw: str) -> str:
     return str(req)
 
 
+def _normalize_extra(extra: str) -> str:
+    """Normalize a Provides-Extra name for comparison.
+
+    Extra names are canonicalized per PEP 685 (like distribution
+    names) so that spellings such as ``code_syntax_highlighting`` and
+    ``code-syntax-highlighting`` compare equal.
+    """
+    return packaging.utils.canonicalize_name(extra)
+
+
 def _metadata_core_match(upstream_bytes: bytes, downstream_bytes: bytes) -> bool:
     """Check whether core metadata fields match between two METADATA files.
 
     Compares Name, Version (single-value) and Requires-Dist,
     Provides-Extra (multi-value, compared as sets with normalization).
     Name is canonicalized per PEP 503.  Requires-Dist entries are
-    normalized via :func:`_normalize_req` so that cosmetic differences
-    (whitespace, quoting, name spelling, order) are ignored.
+    normalized via :func:`_normalize_req` and Provides-Extra names via
+    :func:`_normalize_extra` so that cosmetic differences (whitespace,
+    quoting, name spelling, version spelling, order) are ignored.
     """
     upstream_meta, _ = parse_email(upstream_bytes)
     downstream_meta, _ = parse_email(downstream_bytes)
@@ -989,8 +999,8 @@ def _metadata_core_match(upstream_bytes: bytes, downstream_bytes: bytes) -> bool
     if up_ver.public != down_ver.public:
         return False
 
-    up_extras = set(upstream_meta.get("provides_extra") or [])
-    down_extras = set(downstream_meta.get("provides_extra") or [])
+    up_extras = {_normalize_extra(e) for e in upstream_meta.get("provides_extra") or []}
+    down_extras = {_normalize_extra(e) for e in downstream_meta.get("provides_extra") or []}
     if up_extras != down_extras:
         return False
 
@@ -1021,8 +1031,8 @@ def _metadata_field_diffs(
         ),
         (
             "Provides-Extra",
-            set(upstream_meta.get("provides_extra") or []),
-            set(downstream_meta.get("provides_extra") or []),
+            {_normalize_extra(e) for e in upstream_meta.get("provides_extra") or []},
+            {_normalize_extra(e) for e in downstream_meta.get("provides_extra") or []},
         ),
     )
 

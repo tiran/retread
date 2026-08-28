@@ -454,6 +454,18 @@ def test_compare_resolves_dist_info_case_mismatch() -> None:
         (("foo", "1.5.0", ["bar>=1.0"]), ("foo", "1.5.0+rhaiv.5", ["bar>=1.0"]), True),
         # different base version with local segment
         (("foo", "1.5.0"), ("foo", "2.0+rhaiv.5"), False),
+        # trailing-zero version specifier (<5 == <5.0)
+        (
+            ("foo", "1.0", ["typing-extensions<5,>=4.1"]),
+            ("foo", "1.0", ["typing-extensions<5.0,>=4.1"]),
+            True,
+        ),
+        # extra name spelling (underscore vs hyphen, PEP 685)
+        (
+            ("foo", "1.0", [], ["code_syntax_highlighting"]),
+            ("foo", "1.0", [], ["code-syntax-highlighting"]),
+            True,
+        ),
     ],
     ids=[
         "identical",
@@ -470,6 +482,8 @@ def test_compare_resolves_dist_info_case_mismatch() -> None:
         "wildcard-combined",
         "local-version",
         "local-version-different-base",
+        "normalized-version-spec",
+        "normalized-extra-name",
     ],
 )
 def test_metadata_core_match(up_args: tuple, down_args: tuple, expected: bool) -> None:
@@ -501,7 +515,7 @@ def test_metadata_core_match_extra_fields_ignored() -> None:
         (
             (["bar>=1.0", "shared==2.0"], []),
             (["baz<3", "shared==2.0"], []),
-            (MetadataFieldDiff("Requires-Dist", ("bar>=1.0",), ("baz<3",)),),
+            (MetadataFieldDiff("Requires-Dist", ("bar>=1",), ("baz<3",)),),
         ),
         # only Provides-Extra differs
         (
@@ -514,7 +528,7 @@ def test_metadata_core_match_extra_fields_ignored() -> None:
             (["bar>=1.0"], ["docs"]),
             (["baz<3"], ["testing"]),
             (
-                MetadataFieldDiff("Requires-Dist", ("bar>=1.0",), ("baz<3",)),
+                MetadataFieldDiff("Requires-Dist", ("bar>=1",), ("baz<3",)),
                 MetadataFieldDiff("Provides-Extra", ("docs",), ("testing",)),
             ),
         ),
@@ -524,6 +538,18 @@ def test_metadata_core_match_extra_fields_ignored() -> None:
             (["typing_extensions>=3.7"], []),
             (),
         ),
+        # trailing-zero version specifiers compare equal (<5 == <5.0)
+        (
+            (["typing-extensions<5,>=4.1"], []),
+            (["typing-extensions<5.0,>=4.1"], []),
+            (),
+        ),
+        # extra-name spellings compare equal (PEP 685)
+        (
+            ([], ["code_syntax_highlighting"]),
+            ([], ["code-syntax-highlighting"]),
+            (),
+        ),
     ],
     ids=[
         "equal-after-normalization",
@@ -531,6 +557,8 @@ def test_metadata_core_match_extra_fields_ignored() -> None:
         "provides-extra",
         "both-fields",
         "normalized-dep-name",
+        "normalized-version-spec",
+        "normalized-extra-name",
     ],
 )
 def test_metadata_field_diffs(up: tuple, down: tuple, expected: tuple) -> None:
@@ -820,7 +848,7 @@ def test_check_metadata_records_field_diffs(_metadata_diff_result) -> None:
         {"foo-1.0.dist-info/METADATA": down}.__getitem__,
     )
     assert result.metadata_field_diffs == (
-        MetadataFieldDiff("Requires-Dist", ("bar>=1.0",), ("bar>=2.0",)),
+        MetadataFieldDiff("Requires-Dist", ("bar>=1",), ("bar>=2",)),
     )
 
 
