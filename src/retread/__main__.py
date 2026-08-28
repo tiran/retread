@@ -130,54 +130,9 @@ def _print_comparison(result: WheelComparison) -> None:
         print("\nResult: OK (notices only)")
 
 
-def _entry_to_dict(entry: FileEntry, side: str) -> dict[str, object]:
-    """Convert a FileEntry to a JSON-serializable dict."""
-    return {
-        "filename": entry.filename,
-        "side": side,
-        "severity": entry.severity.value,
-        "classification": entry.classification.value,
-    }
-
-
-def _diff_to_dict(diff: FileDiff) -> dict[str, object]:
-    """Convert a FileDiff to a JSON-serializable dict."""
-    return {
-        "filename": diff.filename,
-        "upstream_size": diff.upstream_size,
-        "downstream_size": diff.downstream_size,
-        "upstream_crc32": diff.upstream_crc32,
-        "downstream_crc32": diff.downstream_crc32,
-        "severity": diff.severity.value,
-        "classification": diff.classification.value,
-    }
-
-
 def _print_json(result: WheelComparison) -> None:
     """Print a wheel comparison result as JSON."""
-    data: dict[str, object] = {
-        "upstream": result.upstream,
-        "downstream": result.downstream,
-        "upstream_wheel": result.upstream_wheel,
-        "downstream_wheel": result.downstream_wheel,
-        "is_identical": result.is_identical,
-        "has_errors": result.has_errors,
-        "only_upstream": [_entry_to_dict(e, "upstream") for e in result.only_upstream],
-        "only_downstream": [_entry_to_dict(e, "downstream") for e in result.only_downstream],
-        "different": [_diff_to_dict(d) for d in result.different],
-        "identical": list(result.identical),
-        "record_mismatches": [
-            {"side": w.side, "message": w.message} for w in result.record_mismatches
-        ],
-        "platform_warnings": [
-            {"side": w.side, "message": w.message} for w in result.platform_warnings
-        ],
-        "venv_bundles": [
-            {"side": b.side, "severity": b.severity.value, "path": b.path}
-            for b in result.venv_bundles
-        ],
-    }
-    json.dump(data, sys.stdout, indent=2)
+    json.dump(result.to_dict(), sys.stdout, indent=2)
     print()
 
 

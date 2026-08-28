@@ -537,6 +537,58 @@ class WheelComparison:
             or any(bundle.severity is Severity.ERROR for bundle in self.venv_bundles)
         )
 
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-serializable dict representation of the comparison."""
+        return {
+            "upstream": self.upstream,
+            "downstream": self.downstream,
+            "upstream_wheel": self.upstream_wheel,
+            "downstream_wheel": self.downstream_wheel,
+            "is_identical": self.is_identical,
+            "has_errors": self.has_errors,
+            "only_upstream": [
+                {
+                    "filename": e.filename,
+                    "side": "upstream",
+                    "severity": e.severity.value,
+                    "classification": e.classification.value,
+                }
+                for e in self.only_upstream
+            ],
+            "only_downstream": [
+                {
+                    "filename": e.filename,
+                    "side": "downstream",
+                    "severity": e.severity.value,
+                    "classification": e.classification.value,
+                }
+                for e in self.only_downstream
+            ],
+            "different": [
+                {
+                    "filename": d.filename,
+                    "upstream_size": d.upstream_size,
+                    "downstream_size": d.downstream_size,
+                    "upstream_crc32": d.upstream_crc32,
+                    "downstream_crc32": d.downstream_crc32,
+                    "severity": d.severity.value,
+                    "classification": d.classification.value,
+                }
+                for d in self.different
+            ],
+            "identical": list(self.identical),
+            "record_mismatches": [
+                {"side": w.side, "message": w.message} for w in self.record_mismatches
+            ],
+            "platform_warnings": [
+                {"side": w.side, "message": w.message} for w in self.platform_warnings
+            ],
+            "venv_bundles": [
+                {"side": b.side, "severity": b.severity.value, "path": b.path}
+                for b in self.venv_bundles
+            ],
+        }
+
 
 def _detect_venv_bundles(
     upstream_infos: dict[str, Any],
