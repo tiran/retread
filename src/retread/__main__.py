@@ -67,6 +67,23 @@ def _print_venv_bundles(result: WheelComparison) -> None:
         print(f"  [{b.side}] {_severity_label(b.severity)}: {b.path}")
 
 
+def _print_metadata_field_diffs(result: WheelComparison) -> None:
+    """Print normalized METADATA field differences, if any."""
+    if not result.metadata_field_diffs:
+        return
+    print("\nMETADATA field differences:")
+    sides = (("upstream only", "only_upstream"), ("downstream only", "only_downstream"))
+    for label, attr in sides:
+        side_diffs = [d for d in result.metadata_field_diffs if getattr(d, attr)]
+        if not side_diffs:
+            continue
+        print(f"  {label}:")
+        for d in side_diffs:
+            print(f"    {d.field}:")
+            for value in getattr(d, attr):
+                print(f"      {value}")
+
+
 def _print_comparison(result: WheelComparison) -> None:
     """Print a wheel comparison result grouped by severity."""
     print(f"Upstream:   {result.upstream_wheel}")
@@ -83,6 +100,7 @@ def _print_comparison(result: WheelComparison) -> None:
             for w in result.platform_warnings:
                 print(f"  [{w.side}] {w.message}")
         _print_venv_bundles(result)
+        _print_metadata_field_diffs(result)
         return
 
     # Collect items grouped by severity, then by type.
@@ -123,6 +141,7 @@ def _print_comparison(result: WheelComparison) -> None:
             print(f"  [{w.side}] {w.message}")
 
     _print_venv_bundles(result)
+    _print_metadata_field_diffs(result)
 
     if result.has_errors:
         print("\nResult: ERRORS found")

@@ -2,9 +2,10 @@
 
 ## METADATA validation
 
-- Better track and report which core fields differ when METADATA
-  comparison triggers an error (currently only reports that core fields
-  differ, not which ones or how).
+- Report differences in the single-value core fields (`Name`,
+  `Version`) when METADATA comparison triggers an error. Differences in
+  the multi-value fields (`Requires-Dist`, `Provides-Extra`) are already
+  reported per-entry via `metadata_field_diffs`.
 - Validate METADATA structure and content (PEP 566 / PEP 643 / PEP 685
   conformance, required fields, well-formed values).
 

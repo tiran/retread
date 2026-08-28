@@ -10,6 +10,7 @@ from retread._compare import (
     Classification,
     FileDiff,
     FileEntry,
+    MetadataFieldDiff,
     Severity,
     VenvBundle,
     WheelComparison,
@@ -22,6 +23,7 @@ from retread._compare import (
     _is_shared_library,
     _local_zip_infos,
     _metadata_core_match,
+    _metadata_field_diffs,
     compare_local_wheel,
     compare_wheels,
 )
@@ -483,6 +485,60 @@ def test_metadata_core_match_extra_fields_ignored() -> None:
     assert _metadata_core_match(up, down) is True
 
 
+# --- _metadata_field_diffs ---
+
+
+@pytest.mark.parametrize(
+    ("up", "down", "expected"),
+    [
+        # equal after normalization (reordered + whitespace)
+        (
+            (["a>=1", "b >= 2"], ["docs", "testing"]),
+            (["b>=2", "a>=1"], ["testing", "docs"]),
+            (),
+        ),
+        # only Requires-Dist differs (shared entry is dropped)
+        (
+            (["bar>=1.0", "shared==2.0"], []),
+            (["baz<3", "shared==2.0"], []),
+            (MetadataFieldDiff("Requires-Dist", ("bar>=1.0",), ("baz<3",)),),
+        ),
+        # only Provides-Extra differs
+        (
+            ([], ["docs", "shared"]),
+            ([], ["shared", "extra-tools"]),
+            (MetadataFieldDiff("Provides-Extra", ("docs",), ("extra-tools",)),),
+        ),
+        # both fields differ (Requires-Dist reported before Provides-Extra)
+        (
+            (["bar>=1.0"], ["docs"]),
+            (["baz<3"], ["testing"]),
+            (
+                MetadataFieldDiff("Requires-Dist", ("bar>=1.0",), ("baz<3",)),
+                MetadataFieldDiff("Provides-Extra", ("docs",), ("testing",)),
+            ),
+        ),
+        # hyphen/underscore dep-name spellings compare equal (PEP 503)
+        (
+            (["typing-extensions>=3.7"], []),
+            (["typing_extensions>=3.7"], []),
+            (),
+        ),
+    ],
+    ids=[
+        "equal-after-normalization",
+        "requires-dist",
+        "provides-extra",
+        "both-fields",
+        "normalized-dep-name",
+    ],
+)
+def test_metadata_field_diffs(up: tuple, down: tuple, expected: tuple) -> None:
+    up_bytes = make_metadata("foo", "1.0", up[0], up[1])
+    down_bytes = make_metadata("foo", "1.0", down[0], down[1])
+    assert _metadata_field_diffs(up_bytes, down_bytes) == expected
+
+
 # --- _compare ---
 
 
@@ -753,6 +809,19 @@ def test_check_metadata_upgrades_severity(_metadata_diff_result) -> None:
     )
     assert result.different[0].severity is Severity.ERROR
     assert result.different[0].classification is Classification.METADATA
+
+
+def test_check_metadata_records_field_diffs(_metadata_diff_result) -> None:
+    up = make_metadata("foo", "1.0", ["bar>=1.0"])
+    down = make_metadata("foo", "1.0", ["bar>=2.0"])
+    result = _check_metadata(
+        _metadata_diff_result,
+        {"foo-1.0.dist-info/METADATA": up}.__getitem__,
+        {"foo-1.0.dist-info/METADATA": down}.__getitem__,
+    )
+    assert result.metadata_field_diffs == (
+        MetadataFieldDiff("Requires-Dist", ("bar>=1.0",), ("bar>=2.0",)),
+    )
 
 
 def test_check_metadata_keeps_notice(_metadata_diff_result) -> None:

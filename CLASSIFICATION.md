@@ -126,6 +126,17 @@ different local-version segments), the METADATA files appear in
 `only_upstream` / `only_downstream` rather than `different`.  Core
 fields are still compared and severities are updated accordingly.
 
+### Field-level differences
+
+For the multi-value fields `Requires-Dist` and `Provides-Extra`,
+retread reports the normalized entries present on only one side as
+**metadata field differences** (`metadata_field_diffs` in the result
+and JSON output).  Entries are normalized before comparison, so
+cosmetic differences (whitespace, quoting, dependency name spelling,
+ordering) are not reported -- only genuine additions or removals.  This
+pinpoints *which* requirements or extras changed rather than merely
+flagging that METADATA differs.
+
 ## RECORD validation
 
 Each wheel's `RECORD` file (CSV manifest) is cross-validated against
@@ -204,12 +215,15 @@ would produce wrong lookup paths.  A warning is raised when the raw
 filename version differs from its normalized form (e.g. `1.0.0`
 vs `1.0`).
 
-### METADATA version consistency
+### METADATA Name and Version consistency
 
-The `Version` field in the wheel's `METADATA` file must match the
-normalized version from the wheel filename.  A mismatch indicates the
-wheel was built or repacked incorrectly.  This check is skipped when
-METADATA is not available.
+The `Name` and `Version` fields in the wheel's `METADATA` file must be
+present and match the distribution and version from the wheel filename.
+`Name` is compared after PEP 503 normalization (case, hyphen vs
+underscore differences ignored); `Version` must match the normalized
+filename version exactly.  A mismatch or a missing field indicates the
+wheel was built or repacked incorrectly.  These checks are skipped only
+when the METADATA file itself is not available.
 
 ### Data scripts heuristic
 
