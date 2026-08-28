@@ -47,6 +47,15 @@ class PlatformWarning:
     message: str
 
 
+# Canonical message for a platform-specific wheel that ships no shared
+# libraries or native extensions.  Defined here as the single source of
+# truth so the ``platlib`` policy key can match it exactly (see
+# ``retread._policy``) without duplicating the wording.
+NO_SHARED_LIBS_WARNING = (
+    "wheel has platform-specific tags but contains no shared libraries or native extensions"
+)
+
+
 def _parse_wheel_tags(wheel_bytes: bytes) -> tuple[bool, list[str]]:
     """Parse a WHEEL file and extract Root-Is-Purelib and Tag values.
 
@@ -218,13 +227,7 @@ def _check_single_wheel(
     if not has_shared_libs and not has_large_scripts:
         has_platform_specific = tag_platforms and tag_platforms != {"any"}
         if has_platform_specific:
-            warnings.append(
-                PlatformWarning(
-                    side,
-                    "wheel has platform-specific tags but contains no shared"
-                    " libraries or native extensions",
-                )
-            )
+            warnings.append(PlatformWarning(side, NO_SHARED_LIBS_WARNING))
         return warnings
 
     if has_shared_libs:

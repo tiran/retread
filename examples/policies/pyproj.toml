@@ -1,0 +1,7 @@
+# Downstream strips the bundled PROJ data files.  Downstream
+# uses system-installed proj.
+["*"]
+description = "Downstream uses system-installed PROJ"
+ignore_missing_downstream = [
+    "pyproj/proj_dir/share/proj/*",
+]

@@ -1,0 +1,8 @@
+# Downstream does not build the sccache-dist distributed
+# compilation coordinator binary.
+["*"]
+description = "Downstream does not build sccache-dist"
+platlib = true
+ignore_missing_downstream = [
+    "sccache-*.data/scripts/sccache-dist",
+]

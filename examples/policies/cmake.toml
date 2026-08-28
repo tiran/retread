@@ -1,0 +1,14 @@
+# cmake bundles native executables in cmake/data/bin/.
+# Downstream rebuilds link against system libraries, producing
+# different (smaller) binaries.  Downstream also builds ccmake.
+["*"]
+description = "Downstream links against system libraries"
+platlib = true
+ignore_differences = [
+    "cmake/data/bin/cmake",
+    "cmake/data/bin/cpack",
+    "cmake/data/bin/ctest",
+]
+ignore_extra_downstream = [
+    "cmake/data/bin/ccmake",
+]

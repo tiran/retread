@@ -1,0 +1,5 @@
+# Downstream builds kubeflow from a modified source fork that adjusts
+# dependency pins and adds integration extras.
+["*"]
+description = "Downstream fork: dependency pins and extras differ"
+ignore_dependency_metadata = true

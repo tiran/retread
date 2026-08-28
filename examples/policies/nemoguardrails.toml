@@ -1,0 +1,5 @@
+# Downstream builds nemoguardrails from a modified source fork that
+# declares additional optional dependency extras.
+["*"]
+description = "Downstream fork: optional dependency extras differ"
+ignore_dependency_metadata = true

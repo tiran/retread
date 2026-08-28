@@ -1,0 +1,14 @@
+# Downstream builds without the optional G-API and Qt GUI modules, so the
+# related type stubs, Qt fonts and platform plugin are absent, and the
+# generated type stubs differ.
+["*"]
+description = "Downstream builds without the optional G-API and Qt GUI modules"
+ignore_missing_downstream = [
+    "cv2/gapi/*",
+    "cv2/qt/*",
+]
+ignore_differences = [
+    "cv2/__init__.pyi",
+    "cv2/detail/__init__.pyi",
+    "cv2/typing/__init__.py",
+]

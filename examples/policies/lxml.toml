@@ -1,0 +1,10 @@
+# Downstream builds against system libxml2/libxslt/libexslt and
+# strips the vendored C headers and __init__.py stubs.
+["*"]
+description = "Downstream builds against system libxml2/libxslt/libexslt"
+ignore_missing_downstream = [
+    "lxml/includes/extlibs/*",
+    "lxml/includes/libexslt/*",
+    "lxml/includes/libxml/*",
+    "lxml/includes/libxslt/*",
+]

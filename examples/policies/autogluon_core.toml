@@ -1,0 +1,5 @@
+# Downstream rebuilds autogluon as a fork, so its declared dependencies
+# reference the matching downstream build versions.
+["*"]
+description = "Downstream fork: dependency version pins reference the downstream build"
+ignore_dependency_metadata = true

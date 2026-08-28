@@ -1,0 +1,7 @@
+# Downstream strips the bundled eccodes definitions data.
+# Downstream uses system-installed eccodes.
+["*"]
+description = "Downstream uses system-installed eccodes"
+ignore_missing_downstream = [
+    "pygrib/share/eccodes/*",
+]

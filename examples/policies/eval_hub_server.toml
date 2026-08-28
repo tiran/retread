@@ -1,0 +1,8 @@
+# Downstream strips the bundled native Go binaries.  Downstream
+# installs them separately.
+["*"]
+description = "Downstream installs eval-hub and eval-runtime-sidecar separately"
+platlib = true
+ignore_missing_downstream = [
+    "eval_hub_server-*.data/data/bin/*",
+]

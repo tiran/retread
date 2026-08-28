@@ -4,6 +4,7 @@ import asyncio
 import difflib
 import json
 import logging
+import pathlib
 import sys
 
 import click
@@ -17,7 +18,8 @@ from retread._compare import (
     Severity,
     WheelComparison,
 )
-from retread._errors import RetreadError
+from retread._errors import PolicyError, RetreadError
+from retread._policy import load_policy_dir
 
 
 def _format_label(classification: Classification) -> str:
@@ -29,6 +31,8 @@ def _severity_label(severity: Severity) -> str:
     """Return a display label for a severity level."""
     if severity is Severity.ERROR:
         return "ERROR"
+    if severity is Severity.IGNORED:
+        return "ignored by policy"
     if severity is Severity.EXPECTED:
         return "expected"
     return "notice"
@@ -49,11 +53,12 @@ def _format_diff(diff: FileDiff) -> str:
     return f"    {diff.filename}{size_info}{label}"
 
 
-_SEVERITY_ORDER = (Severity.ERROR, Severity.NOTICE, Severity.EXPECTED)
+_SEVERITY_ORDER = (Severity.ERROR, Severity.NOTICE, Severity.EXPECTED, Severity.IGNORED)
 _SEVERITY_HEADERS = {
     Severity.ERROR: "Errors",
     Severity.NOTICE: "Notices",
     Severity.EXPECTED: "Expected",
+    Severity.IGNORED: "Ignored by policy",
 }
 _TYPE_HEADERS = ("upstream only", "downstream only", "different")
 
@@ -79,7 +84,8 @@ def _print_metadata_field_diffs(result: WheelComparison) -> None:
             continue
         print(f"  {label}:")
         for d in side_diffs:
-            print(f"    {d.field}:")
+            suffix = " (ignored by policy)" if d.ignored else ""
+            print(f"    {d.field}{suffix}:")
             for value in getattr(d, attr):
                 print(f"      {value}")
 
@@ -225,6 +231,7 @@ def _run_sync(
     backend_name: str,
     downstream_index: str | None,
     upstream_index: str,
+    policy: dict | None = None,
 ) -> WheelComparison:
     backend_cls = getattr(backends, _SYNC_BACKENDS[backend_name])
     with backend_cls() as be:
@@ -233,6 +240,7 @@ def _run_sync(
             downstream_index=downstream_index,
             upstream_index=upstream_index,
             backend=be,
+            policy=policy,
         )
 
 
@@ -241,6 +249,7 @@ async def _run_async(
     backend_name: str,
     downstream_index: str | None,
     upstream_index: str,
+    policy: dict | None = None,
 ) -> WheelComparison:
     backend_cls = getattr(backends, _ASYNC_BACKENDS[backend_name])
     async with backend_cls() as be:
@@ -249,6 +258,7 @@ async def _run_async(
             downstream_index=downstream_index,
             upstream_index=upstream_index,
             backend=be,
+            policy=policy,
         )
 
 
@@ -342,9 +352,24 @@ def _shared_options(func):
     context_settings={"help_option_names": ["-h", "--help"]},
     invoke_without_command=True,
 )
+@click.option(
+    "-p",
+    "--policy-dir",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=pathlib.Path),
+    default=None,
+    help="Directory of per-package TOML policy files.",
+)
 @click.pass_context
-def cli(ctx: click.Context) -> None:
+def cli(ctx: click.Context, policy_dir: pathlib.Path | None) -> None:
     """Compare downstream rebuilds of upstream wheels."""
+    ctx.ensure_object(dict)
+    ctx.obj["policy"] = None
+    if policy_dir is not None:
+        try:
+            ctx.obj["policy"] = load_policy_dir(policy_dir)
+        except PolicyError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            ctx.exit(1)
     if ctx.invoked_subcommand is None:
         click.echo(ctx.get_help())
         ctx.exit(2)
@@ -361,7 +386,9 @@ def cli(ctx: click.Context) -> None:
     show_default=True,
     help="Output format.",
 )
+@click.pass_context
 def compare(
+    ctx: click.Context,
     downstream: str,
     downstream_index: str | None,
     upstream_index: str,
@@ -371,11 +398,14 @@ def compare(
 ) -> None:
     """Compare a downstream wheel against its upstream source."""
     _setup_logging(verbose)
+    policy = ctx.obj["policy"]
     try:
         if backend in _SYNC_BACKENDS:
-            result = _run_sync(downstream, backend, downstream_index, upstream_index)
+            result = _run_sync(downstream, backend, downstream_index, upstream_index, policy)
         else:
-            result = asyncio.run(_run_async(downstream, backend, downstream_index, upstream_index))
+            result = asyncio.run(
+                _run_async(downstream, backend, downstream_index, upstream_index, policy)
+            )
     except RetreadError as exc:
         print(f"error: {exc}", file=sys.stderr)
         sys.exit(1)

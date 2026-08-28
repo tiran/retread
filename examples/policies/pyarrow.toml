@@ -1,0 +1,10 @@
+# Downstream builds without the Azure and GCS filesystem backends and the
+# ORC reader, so the corresponding extension modules are not shipped.
+["*"]
+description = "Downstream builds without Azure/GCS filesystem and ORC support"
+ignore_missing_downstream = [
+    "pyarrow/_azurefs.cpython-*.so",
+    "pyarrow/_gcsfs.cpython-*.so",
+    "pyarrow/_orc.cpython-*.so",
+    "pyarrow/_dataset_orc.cpython-*.so",
+]

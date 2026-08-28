@@ -1,0 +1,5 @@
+# Downstream rebuilds tritonclient without the optional numpy and rapidjson
+# extra dependencies.
+["*"]
+description = "Downstream build omits optional extra dependencies"
+ignore_dependency_metadata = true

@@ -1,0 +1,7 @@
+# Downstream strips the bundled GDAL data files.  Downstream
+# uses system-installed GDAL.
+["*"]
+description = "Downstream uses system-installed GDAL"
+ignore_missing_downstream = [
+    "rasterio/gdal_data/*",
+]

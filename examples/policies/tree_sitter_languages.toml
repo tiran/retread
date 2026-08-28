@@ -1,0 +1,4 @@
+# Downstream pins the tree-sitter runtime dependency to a compatible range.
+["*"]
+description = "Downstream pins the tree-sitter dependency"
+ignore_dependency_metadata = true

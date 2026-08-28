@@ -1,0 +1,8 @@
+# Downstream strips versioned codec shared libraries.  Downstream
+# uses system-provided codec libraries.
+["*"]
+description = "Downstream uses system-provided codec libraries"
+ignore_missing_downstream = [
+    "torchcodec/libtorchcodec_core*.so",
+    "torchcodec/libtorchcodec_custom_ops*.so",
+]

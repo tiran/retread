@@ -1,0 +1,4 @@
+# Downstream builds tqdm-multiprocess without the twine dev extra dependency.
+["*"]
+description = "Downstream drops the twine dev extra dependency"
+ignore_dependency_metadata = true

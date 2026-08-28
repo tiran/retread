@@ -1,0 +1,10 @@
+# Downstream removes the bundled Mozilla CA bundle and patches
+# core.py to use system CA certificates instead.
+["*"]
+description = "Downstream uses system CA certificates instead of bundled Mozilla CA bundle"
+ignore_differences = [
+    "certifi/core.py",
+]
+ignore_missing_downstream = [
+    "certifi/cacert.pem",
+]

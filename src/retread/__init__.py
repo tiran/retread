@@ -69,10 +69,12 @@ from retread._compare import (
 from retread._errors import (
     ComparisonError,
     InvalidWheelError,
+    PolicyError,
     RetreadError,
     WheelNotFoundError,
 )
 from retread._platform import PlatformWarning
+from retread._policy import PackagePolicy, VersionPolicy, apply_policy, load_policy_dir
 from retread._pypi import AsyncPyPISimple
 from retread._record import RecordMismatch
 from retread._resolve import WheelSpec, parse_wheel_spec
@@ -85,18 +87,23 @@ __all__ = [
     "FileEntry",
     "InvalidWheelError",
     "MetadataFieldDiff",
+    "PackagePolicy",
     "PlatformWarning",
+    "PolicyError",
     "RecordMismatch",
     "RetreadError",
     "Severity",
     "VenvBundle",
+    "VersionPolicy",
     "WheelComparison",
     "WheelNotFoundError",
     "WheelSpec",
+    "apply_policy",
     "async_compare_wheels",
     "async_diff",
     "async_retread",
     "compare_wheels",
+    "load_policy_dir",
     "parse_wheel_spec",
     "sync_diff",
     "sync_retread",

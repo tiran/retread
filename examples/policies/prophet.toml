@@ -1,0 +1,12 @@
+# Downstream strips the bundled cmdstan distribution (binaries,
+# TBB library, build system) and uses system-installed cmdstan.  The
+# compiled Stan model binaries are rebuilt and differ.
+["*"]
+description = "Downstream uses system-installed cmdstan; Stan model binaries are rebuilt"
+platlib = true
+ignore_differences = [
+    "prophet/stan_model/prophet*",
+]
+ignore_missing_downstream = [
+    "prophet/stan_model/cmdstan-*",
+]

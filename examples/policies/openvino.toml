@@ -1,0 +1,13 @@
+# Downstream strips bundled TBB, Intel GPU plugin, NPU plugin,
+# and associated cmake files.  Downstream uses system-provided
+# libraries.
+["*"]
+description = "Downstream uses system-provided TBB and accelerator libraries"
+ignore_missing_downstream = [
+    "openvino/cmake/*",
+    "openvino/libs/libhwloc*",
+    "openvino/libs/libopenvino_intel_gpu_plugin.so",
+    "openvino/libs/libopenvino_intel_npu_plugin.so",
+    "openvino/libs/libtbb*",
+    "openvino/libs/cache.json",
+]

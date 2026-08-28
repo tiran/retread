@@ -1,0 +1,7 @@
+# Upstream ships pyproject.toml inside the wheel by mistake (an upstream
+# packaging bug); a wheel should not contain pyproject.toml.
+["*"]
+description = "Upstream bug: pyproject.toml bundled in the wheel differs from downstream"
+ignore_differences = [
+    "pandas/pyproject.toml",
+]

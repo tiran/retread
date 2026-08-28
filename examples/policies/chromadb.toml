@@ -1,0 +1,6 @@
+# Upstream ships a .gitignore inside the wheel; downstream drops it.
+["*"]
+description = "Downstream drops a stray .gitignore bundled in the wheel"
+ignore_missing_downstream = [
+    "chromadb/proto/.gitignore",
+]

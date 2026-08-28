@@ -1,0 +1,5 @@
+# Downstream rebuilds torchvision against its own torch build and relaxes
+# the exact torch version pin.
+["*"]
+description = "Downstream relaxes the torch dependency pin"
+ignore_dependency_metadata = true

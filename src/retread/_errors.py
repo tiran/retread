@@ -24,3 +24,7 @@ class InvalidWheelError(RetreadError):
 
 class ComparisonError(RetreadError):
     """An error occurred during wheel comparison."""
+
+
+class PolicyError(RetreadError):
+    """An error occurred loading or applying a policy."""

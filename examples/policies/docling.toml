@@ -1,0 +1,5 @@
+# Downstream builds docling without the optional easyocr OCR backend, so
+# the corresponding dependency and extra are absent.
+["*"]
+description = "Downstream drops the optional easyocr dependency and extra"
+ignore_dependency_metadata = true

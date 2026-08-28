@@ -1,0 +1,15 @@
+# The webpack module federation bundle (remoteEntry) embeds a content
+# hash in its filename, so upstream and downstream produce differently
+# named files.  package.json in the labextension records a build hash
+# that differs between rebuilds.
+["*"]
+description = "Content-hashed webpack remoteEntry bundle and labextension package.json differ"
+ignore_differences = [
+    "jupyter_leaflet-*.data/data/share/jupyter/labextensions/jupyter-leaflet/package.json",
+]
+ignore_missing_downstream = [
+    "jupyter_leaflet-*.data/data/share/jupyter/labextensions/jupyter-leaflet/static/remoteEntry.*.js",
+]
+ignore_extra_downstream = [
+    "jupyter_leaflet-*.data/data/share/jupyter/labextensions/jupyter-leaflet/static/remoteEntry.*.js",
+]

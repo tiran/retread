@@ -21,6 +21,7 @@ from retread._compare import (
     compare_wheels,
 )
 from retread._errors import ComparisonError, RetreadError
+from retread._policy import apply_policy, lookup_policy
 from retread._resolve import (
     _is_url,
     _wheel_basename,
@@ -122,6 +123,7 @@ def sync_retread(
     downstream_index: str | None = None,
     upstream_index: str = PYPI_SIMPLE_ENDPOINT,
     backend: SyncBackend | None = None,
+    policy: dict | None = None,
 ) -> WheelComparison:
     """Compare a downstream wheel against its upstream source.
 
@@ -166,10 +168,15 @@ def sync_retread(
         # Open upstream and compare
         with SyncRemoteZip(backend.wheel_reader(upstream_url)) as upstream_zip:
             if is_local:
-                return compare_local_wheel(upstream_zip, pathlib.Path(downstream_source))
+                result = compare_local_wheel(upstream_zip, pathlib.Path(downstream_source))
             else:
                 with SyncRemoteZip(backend.wheel_reader(downstream_source)) as downstream_zip:
-                    return compare_wheels(upstream_zip, downstream_zip)
+                    result = compare_wheels(upstream_zip, downstream_zip)
+            if policy is not None:
+                effective = lookup_policy(policy, result.dist, str(result.upstream_version))
+                if effective is not None:
+                    result = apply_policy(result, effective)
+            return result
     except RetreadError:
         raise
     except Exception as exc:
@@ -185,6 +192,7 @@ async def async_retread(
     downstream_index: str | None = None,
     upstream_index: str = PYPI_SIMPLE_ENDPOINT,
     backend: AsyncBackend | None = None,
+    policy: dict | None = None,
 ) -> WheelComparison:
     """Async version of :func:`sync_retread`.
 
@@ -218,14 +226,19 @@ async def async_retread(
         # Open upstream and compare
         async with AsyncRemoteZip(backend.wheel_reader(upstream_url)) as upstream_zip:
             if is_local:
-                return await async_compare_local_wheel(
+                result = await async_compare_local_wheel(
                     upstream_zip, pathlib.Path(downstream_source)
                 )
             else:
                 async with AsyncRemoteZip(
                     backend.wheel_reader(downstream_source)
                 ) as downstream_zip:
-                    return await async_compare_wheels(upstream_zip, downstream_zip)
+                    result = await async_compare_wheels(upstream_zip, downstream_zip)
+            if policy is not None:
+                effective = lookup_policy(policy, result.dist, str(result.upstream_version))
+                if effective is not None:
+                    result = apply_policy(result, effective)
+            return result
     except RetreadError:
         raise
     except Exception as exc:

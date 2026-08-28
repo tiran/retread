@@ -1,0 +1,14 @@
+# Downstream regenerates the SWIG bindings from source.  The generated
+# wrapper modules differ, and the SWIG interface and setup.py source
+# files bundled in the upstream wheel are not shipped.
+["*"]
+description = "SWIG bindings regenerated from source; generated wrappers differ and source files are dropped"
+ignore_differences = [
+    "faiss/swigfaiss.py",
+    "faiss/swigfaiss_avx2.py",
+    "faiss/swigfaiss_avx512.py",
+]
+ignore_missing_downstream = [
+    "faiss/setup.py",
+    "faiss/swigfaiss.i",
+]
