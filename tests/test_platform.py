@@ -2,6 +2,7 @@
 
 import json
 
+import pytest
 from packaging.tags import Tag
 from packaging.version import Version
 
@@ -15,7 +16,7 @@ from retread._platform import (
     check_platform_abi,
 )
 
-from .conftest import FakeInfo, make_metadata, make_wheel_file
+from .conftest import FakeInfo, make_wheel_file
 
 # --- _parse_wheel_tags ---
 
@@ -390,43 +391,59 @@ def test_non_normalized_version_warning():
     assert "'1.1.0'" in ver_warns[0].message
 
 
-def test_metadata_version_matches_no_warning():
-    """METADATA Version matching filename version produces no warning."""
+@pytest.mark.parametrize(
+    ("dist", "version", "meta_name", "meta_version", "expected"),
+    [
+        # Name and Version both match the wheel filename
+        ("foo", "1.0", "foo", "1.0", None),
+        # Version differs from the filename version
+        ("foo", "1.0", "foo", "2.0", "METADATA Version"),
+        # Name differs from the filename distribution
+        ("foo", "1.0", "bar", "1.0", "METADATA Name"),
+        # Name matches after normalization (case, underscore vs hyphen)
+        ("foo-bar", "1.0", "Foo_Bar", "1.0", None),
+        # Missing Version field is an error
+        ("foo", "1.0", "foo", None, "METADATA Version"),
+        # Missing Name field is an error
+        ("foo", "1.0", None, "1.0", "METADATA Name"),
+    ],
+    ids=[
+        "match",
+        "version-mismatch",
+        "name-mismatch",
+        "name-normalized",
+        "version-missing",
+        "name-missing",
+    ],
+)
+def test_metadata_matches_filename(dist, version, meta_name, meta_version, expected):
+    """METADATA Name and Version must be present and match the filename."""
     infos = {"foo/__init__.py": FakeInfo("foo/__init__.py")}
     wheel_bytes = make_wheel_file(True, ["py3-none-any"])
-    metadata = make_metadata("foo", "1.0")
+    lines = ["Metadata-Version: 2.1"]
+    if meta_name is not None:
+        lines.append(f"Name: {meta_name}")
+    if meta_version is not None:
+        lines.append(f"Version: {meta_version}")
+    metadata = "\n".join(lines).encode()
     warnings = _check_single_wheel(
         "upstream",
         infos,
         wheel_bytes,
         _PURE_TAGS,
-        "foo",
-        "1.0",
+        dist,
+        version,
         metadata_bytes=metadata,
-        wheel_filename="foo-1.0-py3-none-any.whl",
+        wheel_filename=f"{dist.replace('-', '_')}-{version}-py3-none-any.whl",
     )
-    assert not any("METADATA Version" in w.message for w in warnings)
-
-
-def test_metadata_version_differs_warning():
-    """METADATA Version differing from filename version produces a warning."""
-    infos = {"foo/__init__.py": FakeInfo("foo/__init__.py")}
-    wheel_bytes = make_wheel_file(True, ["py3-none-any"])
-    metadata = make_metadata("foo", "2.0")
-    warnings = _check_single_wheel(
-        "upstream",
-        infos,
-        wheel_bytes,
-        _PURE_TAGS,
-        "foo",
-        "1.0",
-        metadata_bytes=metadata,
-        wheel_filename="foo-1.0-py3-none-any.whl",
-    )
-    meta_warns = [w for w in warnings if "METADATA Version" in w.message]
-    assert len(meta_warns) == 1
-    assert "'2.0'" in meta_warns[0].message
-    assert "'1.0'" in meta_warns[0].message
+    meta_warns = [
+        w for w in warnings if "METADATA Name" in w.message or "METADATA Version" in w.message
+    ]
+    if expected is None:
+        assert meta_warns == []
+    else:
+        assert len(meta_warns) == 1
+        assert expected in meta_warns[0].message
 
 
 def test_missing_metadata_no_crash():

@@ -468,6 +468,21 @@ class VenvBundle:
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
+class MetadataFieldDiff:
+    """A normalized set difference for a multi-value METADATA field.
+
+    Reports the entries of a repeated METADATA field (``Requires-Dist``
+    or ``Provides-Extra``) that appear on only one side after
+    normalization, so that cosmetic differences (whitespace, ordering,
+    name spelling) are ignored.
+    """
+
+    field: str  # e.g. "Requires-Dist" or "Provides-Extra"
+    only_upstream: tuple[str, ...]
+    only_downstream: tuple[str, ...]
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
 class WheelComparison:
     """Result of comparing an upstream wheel to a downstream rebuild.
 
@@ -485,6 +500,9 @@ class WheelComparison:
         only_downstream: Files present only in the downstream rebuild.
         different: Files present in both but with different content.
         identical: Files present in both with matching content.
+        metadata_field_diffs: Normalized differences in repeated METADATA
+            fields (``Requires-Dist``, ``Provides-Extra``); each entry
+            lists the values present on only one side.
     """
 
     upstream: str
@@ -501,6 +519,7 @@ class WheelComparison:
     record_mismatches: tuple[RecordMismatch, ...] = ()
     platform_warnings: tuple[PlatformWarning, ...] = ()
     venv_bundles: tuple[VenvBundle, ...] = ()
+    metadata_field_diffs: tuple[MetadataFieldDiff, ...] = ()
     upstream_dist: str = ""
     downstream_dist: str = ""
 
@@ -586,6 +605,14 @@ class WheelComparison:
             "venv_bundles": [
                 {"side": b.side, "severity": b.severity.value, "path": b.path}
                 for b in self.venv_bundles
+            ],
+            "metadata_field_diffs": [
+                {
+                    "field": d.field,
+                    "only_upstream": list(d.only_upstream),
+                    "only_downstream": list(d.only_downstream),
+                }
+                for d in self.metadata_field_diffs
             ],
         }
 
@@ -972,6 +999,42 @@ def _metadata_core_match(upstream_bytes: bytes, downstream_bytes: bytes) -> bool
     return up_reqs == down_reqs
 
 
+def _metadata_field_diffs(
+    upstream_bytes: bytes, downstream_bytes: bytes
+) -> tuple[MetadataFieldDiff, ...]:
+    """Return normalized set differences for repeated METADATA fields.
+
+    Compares ``Requires-Dist`` and ``Provides-Extra`` after the same
+    normalization used by :func:`_metadata_core_match` and reports the
+    values present on only one side.  Fields that match (or are absent
+    on both sides) are omitted, so an empty tuple means the reportable
+    fields agree.
+    """
+    upstream_meta, _ = parse_email(upstream_bytes)
+    downstream_meta, _ = parse_email(downstream_bytes)
+
+    fields = (
+        (
+            "Requires-Dist",
+            {_normalize_req(r) for r in upstream_meta.get("requires_dist") or []},
+            {_normalize_req(r) for r in downstream_meta.get("requires_dist") or []},
+        ),
+        (
+            "Provides-Extra",
+            set(upstream_meta.get("provides_extra") or []),
+            set(downstream_meta.get("provides_extra") or []),
+        ),
+    )
+
+    diffs: list[MetadataFieldDiff] = []
+    for field, up_values, down_values in fields:
+        only_up = tuple(sorted(up_values - down_values))
+        only_down = tuple(sorted(down_values - up_values))
+        if only_up or only_down:
+            diffs.append(MetadataFieldDiff(field, only_up, only_down))
+    return tuple(diffs)
+
+
 def _check_metadata(
     result: WheelComparison,
     read_upstream: collections.abc.Callable[[str], bytes],
@@ -1003,12 +1066,18 @@ def _check_metadata(
         if not metadata_diffs:
             return result
         new_different = list(result.different)
+        field_diffs: tuple[MetadataFieldDiff, ...] = ()
         for i, diff in metadata_diffs:
             upstream_bytes = read_upstream(diff.filename)
             downstream_bytes = read_downstream(diff.filename)
             if not _metadata_core_match(upstream_bytes, downstream_bytes):
                 new_different[i] = dataclasses.replace(diff, severity=Severity.ERROR)
-        return dataclasses.replace(result, different=tuple(new_different))
+            field_diffs = field_diffs or _metadata_field_diffs(upstream_bytes, downstream_bytes)
+        return dataclasses.replace(
+            result,
+            different=tuple(new_different),
+            metadata_field_diffs=field_diffs,
+        )
 
     # Different dist-info prefixes: METADATA split across only_upstream / only_downstream
     up_idx = next(
@@ -1029,6 +1098,7 @@ def _check_metadata(
         if _metadata_core_match(upstream_bytes, downstream_bytes)
         else Severity.ERROR
     )
+    field_diffs = _metadata_field_diffs(upstream_bytes, downstream_bytes)
 
     new_only_upstream = list(result.only_upstream)
     new_only_downstream = list(result.only_downstream)
@@ -1046,6 +1116,7 @@ def _check_metadata(
         result,
         only_upstream=tuple(new_only_upstream),
         only_downstream=tuple(new_only_downstream),
+        metadata_field_diffs=field_diffs,
     )
 
 

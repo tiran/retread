@@ -15,7 +15,8 @@ import typing
 from typing import Any
 
 import packaging.utils
-from packaging.utils import InvalidWheelFilename
+from packaging.metadata import parse_email
+from packaging.utils import InvalidWheelFilename, canonicalize_name
 from packaging.version import Version
 
 from retread._resolve import _extract_raw_version
@@ -107,7 +108,7 @@ def _check_single_wheel(
     Scans the wheel's filenames for shared libraries and extension
     modules, then validates them against the wheel's tags and
     ``Root-Is-Purelib`` property.  Also checks version normalization
-    and METADATA version consistency.
+    and that the METADATA Name and Version match the wheel filename.
     """
     warnings: list[PlatformWarning] = []
 
@@ -124,17 +125,25 @@ def _check_single_wheel(
                 )
             )
 
-        # METADATA Version vs filename version check
+        # METADATA Name and Version must be present and match the filename
         if metadata_bytes is not None:
-            parser = email.parser.BytesParser()
-            meta = parser.parsebytes(metadata_bytes)
-            meta_version = meta.get("Version", "").strip()
-            if meta_version and meta_version != normalized_ver:
+            meta, _ = parse_email(metadata_bytes)
+            meta_version = meta.get("version", "")
+            if meta_version != normalized_ver:
                 warnings.append(
                     PlatformWarning(
                         side,
                         f"METADATA Version '{meta_version}' does not match"
                         f" filename version '{normalized_ver}'",
+                    )
+                )
+            meta_name = meta.get("name", "")
+            if canonicalize_name(meta_name) != canonicalize_name(dist):
+                warnings.append(
+                    PlatformWarning(
+                        side,
+                        f"METADATA Name '{meta_name}' does not match"
+                        f" filename distribution '{dist}'",
                     )
                 )
 

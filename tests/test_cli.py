@@ -14,6 +14,7 @@ from retread._compare import (
     Classification,
     FileDiff,
     FileEntry,
+    MetadataFieldDiff,
     RecordMismatch,
     Severity,
     WheelComparison,
@@ -152,6 +153,59 @@ def test_print_json_notice_only(capsys, notice_only_result: WheelComparison) -> 
     assert data["is_identical"] is False
     assert data["different"][0]["upstream_size"] == 1000
     assert data["different"][0]["downstream_size"] == 2000
+
+
+# --- metadata field diffs ---
+
+
+def _metadata_diff_result() -> WheelComparison:
+    diff = FileDiff(
+        "foo-1.0.dist-info/METADATA", 100, 200, 111, 222, Severity.ERROR, Classification.METADATA
+    )
+    return WheelComparison(
+        upstream="up",
+        downstream="down",
+        upstream_wheel="foo-1.0-py3-none-any.whl",
+        downstream_wheel="foo-1.0-py3-none-any.whl",
+        dist="foo",
+        upstream_version=Version("1.0"),
+        downstream_version=Version("1.0"),
+        only_upstream=(),
+        only_downstream=(),
+        different=(diff,),
+        identical=(),
+        metadata_field_diffs=(
+            MetadataFieldDiff("Requires-Dist", ("bar>=1.0",), ("bar>=2.0",)),
+            MetadataFieldDiff("Provides-Extra", ("docs",), ()),
+        ),
+    )
+
+
+def test_print_json_metadata_field_diffs(capsys) -> None:
+    _print_json(_metadata_diff_result())
+    data = json.loads(capsys.readouterr().out)
+    assert data["metadata_field_diffs"] == [
+        {
+            "field": "Requires-Dist",
+            "only_upstream": ["bar>=1.0"],
+            "only_downstream": ["bar>=2.0"],
+        },
+        {"field": "Provides-Extra", "only_upstream": ["docs"], "only_downstream": []},
+    ]
+
+
+def test_print_comparison_metadata_field_diffs(capsys) -> None:
+    _print_comparison(_metadata_diff_result())
+    out = capsys.readouterr().out
+    assert "METADATA field differences:" in out
+    # Grouped by side, then by field, then values.
+    up = out.index("upstream only:")
+    down = out.index("downstream only:")
+    assert up < down
+    assert out.index("Requires-Dist:", up) < down
+    assert out.index("bar>=1.0", up) < down
+    assert "docs" in out[up:down]
+    assert out.index("bar>=2.0", down) > down
 
 
 # --- main argument parsing ---

@@ -37,6 +37,10 @@ package indexes.
   (RFC 2606) for fake URLs in tests, not `example.com`.
   Good: `https://pypi.example/`, `https://rebuild.test/`
   Bad: `https://example.com/`, `https://rebuild.example.com/`
+- **Prefer parametrized or combined tests.** Use `pytest.mark.parametrize`
+  or combine related cases into one test when doing so makes the suite
+  easier for a human to read. Avoid many near-identical test functions
+  that differ only in inputs and expected values.
 
 ## Code style rules
 
@@ -45,6 +49,9 @@ package indexes.
   Exception: lazy imports of optional backend dependencies (aiohttp, httpx2,
   requests, zipwire.backends) are allowed inside properties and methods to
   avoid import errors when the dependency is not installed.
+- **Parse METADATA with `packaging.metadata.parse_email`.** Always use
+  `packaging.metadata.parse_email` to parse `METADATA` files. Do not use
+  `email.parser` for METADATA (it is fine for the `WHEEL` file).
 
 ## Git rules
 
