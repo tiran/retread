@@ -1,5 +1,9 @@
-# Downstream rebuilds autogluon as a fork, so its declared dependencies
-# reference the matching downstream build versions and adjust some extras.
+# Midstream fork of autogluon: its declared dependencies reference the
+# matching downstream build versions, adjust some extras, and its source
+# files differ.
 ["*"]
-description = "Downstream fork: dependency version pins reference the downstream build"
+description = "Midstream fork: source files and dependency version pins differ"
 ignore_dependency_metadata = true
+ignore_differences = [
+    "*",
+]

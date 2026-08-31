@@ -1,0 +1,16 @@
+# No Linux upstream wheel is published, so the downstream Linux rebuild is
+# compared against a wheel for a different platform.  The gssapi/raw C
+# extensions are built against a different GSSAPI implementation and so
+# differ from the upstream binaries.
+["*"]
+description = "No Linux upstream wheel; gssapi/raw extensions differ by GSSAPI implementation"
+allow_cross_platform = true
+ignore_differences = [
+    "gssapi/raw/*.so",
+]
+ignore_missing_downstream = [
+    "gssapi/raw/*.so",
+]
+ignore_extra_downstream = [
+    "gssapi/raw/*.so",
+]

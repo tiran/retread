@@ -1,0 +1,7 @@
+# The downstream rebuild compiles the optional playhouse C extension
+# (_sqlite_udf), which the upstream pure-Python wheel does not ship.
+["*"]
+description = "Downstream builds the optional playhouse _sqlite_udf C extension"
+ignore_extra_downstream = [
+    "playhouse/_sqlite_udf.*.so",
+]

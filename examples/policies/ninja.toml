@@ -1,0 +1,14 @@
+# The downstream ninja package intentionally omits the bundled ninja binary
+# (the rebuild relies on the system ninja instead), so the upstream
+# .data/scripts/ninja executable has no downstream counterpart.  ninja/__init__.py
+# is patched accordingly to locate the system binary rather than the vendored one.
+["*"]
+description = "Downstream omits the bundled ninja binary and uses the system ninja"
+allow_cross_platform = true
+platlib = true
+ignore_missing_downstream = [
+    "ninja-*.data/scripts/ninja",
+]
+ignore_differences = [
+    "ninja/__init__.py",
+]

@@ -5,7 +5,7 @@
 # remaining content differences are left visible for review.
 ["*"]
 description = "Downstream is a CPU-only build without GPU extensions"
-# Downstream fork also adjusts declared dependency version bounds and extras.
+# Midstream fork also adjusts declared dependency version bounds and extras.
 ignore_dependency_metadata = true
 ignore_extra_downstream = [
     "vllm/_C.abi3.so",

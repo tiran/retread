@@ -1,0 +1,6 @@
+# Upstream only publishes a py2-none-any wheel; the downstream py3-none-any
+# rebuild is compared against it.  Both are pure-Python wheels, so the tag
+# mismatch is expected.
+["*"]
+description = "Upstream ships only a py2 wheel; compared against the py3 rebuild"
+allow_cross_platform = true
