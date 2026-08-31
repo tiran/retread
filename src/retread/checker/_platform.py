@@ -25,7 +25,11 @@ if typing.TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _CPYTHON_EXT_RE = re.compile(r"\.cpython-(\d+\w?)-(.+)\.so$")
-_SHARED_LIB_RE = re.compile(r"\.so(\.[0-9.]+)?$")
+# Windows CPython extension modules, e.g. ``_foo.cp312-win_amd64.pyd``.
+_PYD_EXT_RE = re.compile(r"\.cp(\d+\w?)-[^/]+\.pyd$")
+# Linux/macOS shared objects (``.so``, ``libfoo.so.1``), macOS dynamic
+# libraries (``.dylib``), and Windows DLLs (``.dll``).
+_SHARED_LIB_RE = re.compile(r"(\.so(\.[0-9.]+)?|\.dylib|\.dll)$")
 
 
 def _expand_compound_tags(tags: list[str]) -> set[str]:
@@ -130,6 +134,12 @@ def _check_single_wheel(
             has_shared_libs = True
             continue
 
+        pyd = _PYD_EXT_RE.search(fname)
+        if pyd:
+            cpython_versions.add(pyd.group(1))
+            has_shared_libs = True
+            continue
+
         if fname.endswith(".abi3.so"):
             has_abi3 = True
             has_shared_libs = True
@@ -141,6 +151,11 @@ def _check_single_wheel(
             continue
 
         if _SHARED_LIB_RE.search(fname) is not None:
+            has_shared_libs = True
+            continue
+
+        # Plain (untagged) Windows extension module, e.g. ``_foo.pyd``.
+        if fname.endswith(".pyd"):
             has_shared_libs = True
 
     # Scripts heuristic: large files in data/scripts/ suggest platlib

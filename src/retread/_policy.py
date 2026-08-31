@@ -17,6 +17,7 @@ from retread._errors import PolicyError
 
 _VALID_KEYS = frozenset(
     {
+        "allow_cross_platform",
         "description",
         "ignore_dependency_metadata",
         "ignore_differences",
@@ -37,6 +38,7 @@ class VersionPolicy:
     ignore_extra_downstream: tuple[str, ...]
     platlib: bool
     ignore_dependency_metadata: bool = False
+    allow_cross_platform: bool = False
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -84,7 +86,7 @@ def _parse_version_table(table: dict, filename: str, version_key: str) -> Versio
                 f"{filename}: '{key}' in [{version_key!r}] must be a list of strings"
             )
 
-    for key in ("platlib", "ignore_dependency_metadata"):
+    for key in ("platlib", "ignore_dependency_metadata", "allow_cross_platform"):
         if not isinstance(table.get(key, False), bool):
             raise PolicyError(f"{filename}: '{key}' in [{version_key!r}] must be a boolean")
 
@@ -95,6 +97,7 @@ def _parse_version_table(table: dict, filename: str, version_key: str) -> Versio
         ignore_extra_downstream=tuple(table.get("ignore_extra_downstream", [])),
         platlib=table.get("platlib", False),
         ignore_dependency_metadata=table.get("ignore_dependency_metadata", False),
+        allow_cross_platform=table.get("allow_cross_platform", False),
     )
 
 

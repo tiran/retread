@@ -237,6 +237,26 @@ def test_shared_lib_platlib_no_purelib_warning():
     assert not any("platform tag 'any'" in w.message for w in warnings)
 
 
+@pytest.mark.parametrize(
+    ("member", "tag"),
+    [
+        ("foo/_bar.cp312-win_amd64.pyd", Tag("cp312", "cp312", "win_amd64")),
+        ("foo/_bar.pyd", Tag("cp312", "cp312", "win_amd64")),
+        ("foo/_bar.cpython-312-darwin.so", Tag("cp312", "cp312", "macosx_11_0_arm64")),
+        ("foo/.dylibs/libbar.dylib", Tag("cp312", "cp312", "macosx_11_0_arm64")),
+        ("foo/libpq.dll", Tag("cp312", "cp312", "win_amd64")),
+    ],
+    ids=["win-pyd-tagged", "win-pyd-plain", "macos-so", "macos-dylib", "win-dll"],
+)
+def test_native_extension_across_platforms(member, tag):
+    """Windows .pyd/.dll and macOS .so/.dylib count as native code (no bogus warning)."""
+    infos = {member: FakeInfo(member)}
+    tags = frozenset({tag})
+    wheel_bytes = make_wheel_file(False, [f"{tag.interpreter}-{tag.abi}-{tag.platform}"])
+    warnings = _check("upstream", infos, wheel_bytes, tags, "foo", "1.0")
+    assert not any("no shared" in w.message for w in warnings)
+
+
 def test_cpython_ext_correct_version():
     """cpython extension with matching version tag produces no warning."""
     infos = {

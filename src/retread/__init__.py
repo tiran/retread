@@ -61,8 +61,11 @@ from retread._errors import (
     ComparisonError,
     InvalidMetadataError,
     InvalidWheelError,
+    NoWheelsError,
     PolicyError,
+    ProjectNotFoundError,
     RetreadError,
+    VersionNotFoundError,
     WheelNotFoundError,
 )
 from retread._findings import (
@@ -73,11 +76,12 @@ from retread._findings import (
     MetadataFieldDiff,
     PlatformWarning,
     RecordMismatch,
+    ResolutionMismatch,
     VenvBundle,
 )
 from retread._policy import PackagePolicy, VersionPolicy, load_policy_dir
 from retread._pypi import AsyncPyPISimple
-from retread._resolve import WheelSpec, parse_wheel_spec
+from retread._resolve import Resolution, ResolutionStatus, WheelSpec, parse_wheel_spec
 from retread._types import Filename, Url
 from retread._wheel import FileStat, WheelInfo, WheelSource
 from retread.checker import compare
@@ -96,15 +100,21 @@ __all__ = [
     "InvalidMetadataError",
     "InvalidWheelError",
     "MetadataFieldDiff",
+    "NoWheelsError",
     "PackagePolicy",
     "PlatformWarning",
     "PolicyError",
+    "ProjectNotFoundError",
     "RecordMismatch",
+    "Resolution",
+    "ResolutionMismatch",
+    "ResolutionStatus",
     "RetreadError",
     "Severity",
     "Side",
     "Url",
     "VenvBundle",
+    "VersionNotFoundError",
     "VersionPolicy",
     "WheelInfo",
     "WheelNotFoundError",

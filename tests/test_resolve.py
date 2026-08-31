@@ -4,19 +4,31 @@ import pytest
 from packaging.tags import Tag
 from packaging.version import Version
 
-from retread._errors import InvalidWheelError, WheelNotFoundError
+from retread import Context
+from retread._api import _apply_resolution_mismatch, _resolution_mismatch
+from retread._errors import (
+    InvalidWheelError,
+    NoWheelsError,
+    VersionNotFoundError,
+    WheelNotFoundError,
+)
+from retread._policy import PackagePolicy, VersionPolicy
 from retread._resolve import (
+    Resolution,
+    ResolutionStatus,
     _best_tag_score,
     _extract_arch,
     _tag_match_score,
     _tags_compatible,
     _version_match,
+    _wheel_tag_string,
     _wheels_compatible,
     find_matching_wheel,
     parse_wheel_spec,
+    resolve_upstream,
 )
 
-from .conftest import FakePage, FakePkg
+from .conftest import FakePage, FakePkg, make_comparison
 
 # --- parse_wheel_spec ---
 
@@ -326,3 +338,178 @@ def test_find_matching_wheel_local_version_no_match() -> None:
     )
     with pytest.raises(WheelNotFoundError):
         find_matching_wheel(page, spec, index="https://pypi.org/simple/")
+
+
+# --- _wheel_tag_string ---
+
+
+@pytest.mark.parametrize(
+    ("filename", "expected"),
+    [
+        ("foo-1.0-py3-none-any.whl", "py3-none-any"),
+        ("foo-1.0-cp312-cp312-manylinux_2_28_x86_64.whl", "cp312-cp312-manylinux_2_28_x86_64"),
+        ("foo-1.0-1-cp312-cp312-win_amd64.whl", "cp312-cp312-win_amd64"),
+    ],
+    ids=["pure", "manylinux", "build-tag"],
+)
+def test_wheel_tag_string(filename: str, expected: str) -> None:
+    assert _wheel_tag_string(filename) == expected
+
+
+# --- resolve_upstream ---
+
+
+def test_resolve_upstream_matched() -> None:
+    """A tag-compatible wheel resolves as MATCHED."""
+    spec = parse_wheel_spec("foo-1.0-cp312-cp312-linux_x86_64.whl")
+    page = FakePage(
+        [
+            FakePkg("foo-1.0.tar.gz"),
+            FakePkg("foo-1.0-cp312-cp312-manylinux_2_28_x86_64.whl"),
+        ]
+    )
+    resolution = resolve_upstream(page, spec, index="https://pypi.org/simple/")
+    assert resolution.status is ResolutionStatus.MATCHED
+    assert resolution.package.filename == "foo-1.0-cp312-cp312-manylinux_2_28_x86_64.whl"
+    assert resolution.available_tags == ()
+
+
+def test_resolve_upstream_fallback_purelib_vs_manylinux() -> None:
+    """A purelib downstream against manylinux upstream falls back to a cp3x wheel.
+
+    Mirrors the google_crc32c case: downstream is ``py3-none-any`` but upstream
+    ships only compiled wheels, so no tag matches.  The fallback prefers the
+    manylinux x86_64 wheel with the highest CPython version and lists all
+    available upstream tags.
+    """
+    spec = parse_wheel_spec("google_crc32c-1.8.0-1-py3-none-any.whl")
+    page = FakePage(
+        [
+            FakePkg("google_crc32c-1.8.0.tar.gz"),
+            FakePkg("google_crc32c-1.8.0-cp311-cp311-manylinux_2_17_x86_64.whl"),
+            FakePkg("google_crc32c-1.8.0-cp312-cp312-manylinux_2_17_x86_64.whl"),
+            FakePkg("google_crc32c-1.8.0-cp312-cp312-macosx_11_0_arm64.whl"),
+            FakePkg("google_crc32c-1.8.0-cp312-cp312-win_amd64.whl"),
+        ]
+    )
+    resolution = resolve_upstream(page, spec, index="https://pypi.org/simple/")
+    assert resolution.status is ResolutionStatus.FALLBACK
+    assert (
+        resolution.package.filename == "google_crc32c-1.8.0-cp312-cp312-manylinux_2_17_x86_64.whl"
+    )
+    assert "cp311-cp311-manylinux_2_17_x86_64" in resolution.available_tags
+    assert "cp312-cp312-win_amd64" in resolution.available_tags
+
+
+def test_resolve_upstream_no_version() -> None:
+    """A missing version raises VersionNotFoundError listing available versions."""
+    spec = parse_wheel_spec("foo-9.9.9-py3-none-any.whl")
+    page = FakePage(
+        [
+            FakePkg("foo-1.0.tar.gz"),
+            FakePkg("foo-1.0-py3-none-any.whl"),
+            FakePkg("foo-2.0-py3-none-any.whl"),
+        ]
+    )
+    with pytest.raises(VersionNotFoundError) as excinfo:
+        resolve_upstream(page, spec, index="https://pypi.org/simple/")
+    assert excinfo.value.available_versions == ("1.0", "2.0")
+    assert "9.9.9" in str(excinfo.value)
+
+
+def test_resolve_upstream_no_wheels() -> None:
+    """A version published only as an sdist raises NoWheelsError."""
+    spec = parse_wheel_spec("foo-1.0-py3-none-any.whl")
+    page = FakePage([FakePkg("foo-1.0.tar.gz")])
+    with pytest.raises(NoWheelsError):
+        resolve_upstream(page, spec, index="https://pypi.org/simple/")
+
+
+# --- _api resolution-mismatch helpers ---
+
+
+def test_resolution_mismatch_fallback() -> None:
+    """A fallback resolution produces a mismatch carrying both sides' tags."""
+    spec = parse_wheel_spec("foo-1.0-py3-none-any.whl")
+    resolution = Resolution(
+        ResolutionStatus.FALLBACK,
+        FakePkg("foo-1.0-cp312-cp312-manylinux_2_17_x86_64.whl"),
+        spec,
+        "https://pypi.example/",
+        available_tags=("cp311-cp311-manylinux_2_17_x86_64", "cp312-cp312-manylinux_2_17_x86_64"),
+    )
+    mismatch = _resolution_mismatch(resolution, "foo-1.0-py3-none-any.whl")
+    assert mismatch is not None
+    assert mismatch.downstream_tags == ("py3-none-any",)
+    assert mismatch.upstream_tags == resolution.available_tags
+    assert "py3-none-any" in mismatch.message
+    assert "foo-1.0-cp312-cp312-manylinux_2_17_x86_64.whl" in mismatch.message
+
+
+def test_resolution_mismatch_matched_is_none() -> None:
+    """A matched resolution (or no resolution) produces no mismatch."""
+    spec = parse_wheel_spec("foo-1.0-cp312-cp312-linux_x86_64.whl")
+    matched = Resolution(
+        ResolutionStatus.MATCHED,
+        FakePkg("foo-1.0-cp312-cp312-manylinux_2_17_x86_64.whl"),
+        spec,
+        "https://pypi.example/",
+    )
+    assert _resolution_mismatch(matched, "foo-1.0-cp312-cp312-linux_x86_64.whl") is None
+    assert _resolution_mismatch(None, "foo-1.0-py3-none-any.whl") is None
+
+
+def test_apply_resolution_mismatch_appends() -> None:
+    """_apply_resolution_mismatch appends a fallback mismatch to the comparison analysis."""
+    result = make_comparison(
+        upstream_wheel="foo-1.0-cp312-cp312-manylinux_2_17_x86_64.whl",
+        downstream_wheel="foo-1.0-py3-none-any.whl",
+    )
+    spec = parse_wheel_spec("foo-1.0-py3-none-any.whl")
+    resolution = Resolution(
+        ResolutionStatus.FALLBACK,
+        FakePkg("foo-1.0-cp312-cp312-manylinux_2_17_x86_64.whl"),
+        spec,
+        "https://pypi.example/",
+        available_tags=("cp312-cp312-manylinux_2_17_x86_64",),
+    )
+    _apply_resolution_mismatch(result, resolution)
+    assert len(result.analysis.resolution_mismatches) == 1
+    assert result.has_errors is True
+
+
+def _cross_platform_policy(allow: bool) -> dict[str, PackagePolicy]:
+    """A policy for ``foo`` toggling cross-platform validation."""
+    vp = VersionPolicy(
+        description="test",
+        ignore_differences=(),
+        ignore_missing_downstream=(),
+        ignore_extra_downstream=(),
+        platlib=False,
+        allow_cross_platform=allow,
+    )
+    return {"foo": PackagePolicy(dist_name="foo", versions={"*": vp})}
+
+
+@pytest.mark.parametrize("allow", [True, False])
+def test_apply_resolution_mismatch_allow_cross_platform(allow: bool) -> None:
+    """allow_cross_platform marks the fallback mismatch ignored (not an error)."""
+    result = make_comparison(
+        upstream_wheel="foo-1.0-cp312-cp312-win_amd64.whl",
+        downstream_wheel="foo-1.0-cp312-cp312-linux_x86_64.whl",
+        context=Context.default(policy=_cross_platform_policy(allow)),
+    )
+    spec = parse_wheel_spec("foo-1.0-cp312-cp312-linux_x86_64.whl")
+    resolution = Resolution(
+        ResolutionStatus.FALLBACK,
+        FakePkg("foo-1.0-cp312-cp312-win_amd64.whl"),
+        spec,
+        "https://pypi.example/",
+        available_tags=("cp312-cp312-win_amd64",),
+    )
+    _apply_resolution_mismatch(result, resolution)
+    assert len(result.analysis.resolution_mismatches) == 1
+    assert result.analysis.resolution_mismatches[0].ignored is allow
+    # The mismatch is still reported, but only counts as an error when the
+    # policy does not accept the cross-platform comparison.
+    assert result.has_errors is (not allow)

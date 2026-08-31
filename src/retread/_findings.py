@@ -118,6 +118,29 @@ class VenvBundle:
 
 
 @dataclasses.dataclass(slots=True)
+class ResolutionMismatch:
+    """The upstream wheel did not tag-match the downstream wheel.
+
+    Emitted when the upstream release has no wheel whose tags match the
+    downstream rebuild, so retread fell back to another wheel of the same
+    name and version to allow a file-level comparison.  By default this is an
+    error: the downstream build targets platform/ABI tags the upstream
+    release does not provide (or vice versa), but the comparison still helps
+    explain the mismatch.
+
+    A package whose policy sets ``allow_cross_platform`` accepts this
+    cross-platform comparison (e.g. a downstream Linux wheel validated against
+    an upstream Windows or macOS binary wheel); the mismatch is then marked
+    :attr:`ignored` so it is still reported but not treated as an error.
+    """
+
+    message: str
+    downstream_tags: tuple[str, ...]  # tags of the downstream wheel
+    upstream_tags: tuple[str, ...]  # wheel tags published upstream for this version
+    ignored: bool = False  # accepted by policy; reported but not an error
+
+
+@dataclasses.dataclass(slots=True)
 class MetadataFieldDiff:
     """A normalized set difference for a multi-value METADATA field.
 
@@ -150,6 +173,7 @@ class Analysis:
     platform_warnings: list[PlatformWarning] = dataclasses.field(default_factory=list)
     venv_bundles: list[VenvBundle] = dataclasses.field(default_factory=list)
     metadata_field_diffs: list[MetadataFieldDiff] = dataclasses.field(default_factory=list)
+    resolution_mismatches: list[ResolutionMismatch] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -189,6 +213,9 @@ class Comparison:
         are always errors by design: a malformed RECORD/WHEEL/METADATA or a
         wheel-embedded venv is a packaging bug regardless of policy (only the
         ``platlib`` "no shared libraries" warning is policy-suppressible).
+        Upstream resolution mismatches are errors too, unless the package's
+        policy accepts the cross-platform comparison (``allow_cross_platform``),
+        which marks the mismatch :attr:`~ResolutionMismatch.ignored`.
         """
         analysis = self.analysis
         return (
@@ -197,6 +224,7 @@ class Comparison:
             or any(d.severity is Severity.ERROR for d in analysis.different if not d.hidden)
             or bool(analysis.record_mismatches)
             or bool(analysis.platform_warnings)
+            or any(not m.ignored for m in analysis.resolution_mismatches)
             or any(bundle.severity is Severity.ERROR for bundle in analysis.venv_bundles)
         )
 
@@ -264,5 +292,14 @@ class Comparison:
                     "ignored": d.ignored,
                 }
                 for d in analysis.metadata_field_diffs
+            ],
+            "resolution_mismatches": [
+                {
+                    "message": m.message,
+                    "downstream_tags": list(m.downstream_tags),
+                    "upstream_tags": list(m.upstream_tags),
+                    "ignored": m.ignored,
+                }
+                for m in analysis.resolution_mismatches
             ],
         }

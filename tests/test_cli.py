@@ -11,6 +11,7 @@ from retread import (
     FileEntry,
     MetadataFieldDiff,
     RecordMismatch,
+    ResolutionMismatch,
     Severity,
 )
 from retread.__main__ import (
@@ -270,6 +271,46 @@ def test_print_comparison_record_mismatches_with_diffs(capsys) -> None:
     out = capsys.readouterr().out
     assert "RECORD mismatches (1):" in out
     assert "[upstream] file in ZIP but not in RECORD: extra.py" in out
+
+
+def _resolution_result() -> Comparison:
+    return make_comparison(
+        upstream_wheel="google_crc32c-1.8.0-cp312-cp312-manylinux_2_17_x86_64.whl",
+        downstream_wheel="google_crc32c-1.8.0-1-py3-none-any.whl",
+        identical=("google_crc32c/__init__.py",),
+        resolution_mismatches=(
+            ResolutionMismatch(
+                message=(
+                    "no upstream wheel matches the downstream tags (py3-none-any); "
+                    "compared against google_crc32c-1.8.0-cp312-cp312-manylinux_2_17_x86_64.whl"
+                ),
+                downstream_tags=("py3-none-any",),
+                upstream_tags=("cp312-cp312-manylinux_2_17_x86_64",),
+            ),
+        ),
+    )
+
+
+def test_print_comparison_resolution_mismatch(capsys) -> None:
+    """A fallback resolution mismatch is printed and counts as an error."""
+    result = _resolution_result()
+    assert result.has_errors is True
+    _print_comparison(result)
+    out = capsys.readouterr().out
+    assert "Upstream resolution mismatches (1):" in out
+    assert "no upstream wheel matches the downstream tags" in out
+
+
+def test_print_json_resolution_mismatch(capsys) -> None:
+    """Resolution mismatches are serialized in the JSON report."""
+    result = _resolution_result()
+    _print_json(result)
+    data = json.loads(capsys.readouterr().out)
+    assert data["has_errors"] is True
+    assert len(data["resolution_mismatches"]) == 1
+    mismatch = data["resolution_mismatches"][0]
+    assert mismatch["downstream_tags"] == ["py3-none-any"]
+    assert mismatch["upstream_tags"] == ["cp312-cp312-manylinux_2_17_x86_64"]
 
 
 def test_print_json_record_mismatches(capsys) -> None:

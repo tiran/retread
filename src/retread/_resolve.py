@@ -3,14 +3,20 @@
 from __future__ import annotations
 
 import dataclasses
+import enum
 import pathlib
 import re
 import typing
 
 import packaging.utils
-from packaging.utils import InvalidWheelFilename
+from packaging.utils import InvalidSdistFilename, InvalidWheelFilename
 
-from retread._errors import InvalidWheelError, WheelNotFoundError
+from retread._errors import (
+    InvalidWheelError,
+    NoWheelsError,
+    VersionNotFoundError,
+    WheelNotFoundError,
+)
 
 if typing.TYPE_CHECKING:
     from packaging.tags import Tag
@@ -234,15 +240,178 @@ def _version_match(upstream: Version, downstream: Version) -> bool:
     return False
 
 
+def _wheel_tag_string(filename: str) -> str:
+    """Return the compatibility-tag segment of a wheel filename.
+
+    ``foo-1.0-cp312-cp312-manylinux_2_28_x86_64.whl`` ->
+    ``cp312-cp312-manylinux_2_28_x86_64``.  Used verbatim in reports so the
+    displayed tags match the published filenames exactly.
+    """
+    return "-".join(filename.removesuffix(".whl").split("-")[-3:])
+
+
+def _platform_rank(platform: str) -> int:
+    """Rank a platform tag for fallback wheel selection (higher = preferred)."""
+    if "manylinux" in platform and platform.endswith("_x86_64"):
+        return 5
+    if "linux" in platform and platform.endswith("_x86_64"):
+        return 4
+    if "linux" in platform:
+        return 3
+    if "macos" in platform or "darwin" in platform:
+        return 2
+    if "win" in platform:
+        return 1
+    return 0
+
+
+def _fallback_rank(tags: frozenset[Tag]) -> tuple[int, int]:
+    """Score a wheel's tags for fallback selection: ``(platform, cpython)``."""
+    best = (0, 0)
+    for tag in tags:
+        m = _CPYTHON_RE.match(tag.interpreter)
+        rank = (_platform_rank(tag.platform), int(m.group(1)) if m else 0)
+        if rank > best:
+            best = rank
+    return best
+
+
+class ResolutionStatus(enum.Enum):
+    """Outcome of resolving an upstream wheel for a downstream rebuild."""
+
+    MATCHED = "matched"  # a tag-compatible wheel was found
+    FALLBACK = "fallback"  # no tag match; compared against another wheel of the version
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class Resolution:
+    """A successfully resolved upstream wheel plus how it was chosen.
+
+    ``status`` is :attr:`ResolutionStatus.MATCHED` when a tag-compatible wheel
+    was found, or :attr:`ResolutionStatus.FALLBACK` when the requested version
+    exists but no wheel matches the downstream tags, so a different wheel of the
+    same version was chosen to allow a comparison anyway.  In the fallback case
+    ``available_tags`` lists the wheel tags published upstream for the version.
+    """
+
+    status: ResolutionStatus
+    package: DistributionPackage
+    spec: WheelSpec
+    index: str
+    available_tags: tuple[str, ...] = ()
+
+
+def _project_packages(
+    page: ProjectPage, spec: WheelSpec
+) -> tuple[list[tuple[DistributionPackage, Version, frozenset[Tag]]], set[Version]]:
+    """Collect this project's wheels and all versions it publishes.
+
+    Returns ``(wheels, versions)`` where *wheels* is a list of
+    ``(package, version, tags)`` for each matching wheel and *versions* is the
+    set of every version seen for the project across wheels and source
+    distributions.
+    """
+    wheels: list[tuple[DistributionPackage, Version, frozenset[Tag]]] = []
+    versions: set[Version] = set()
+    for pkg in page.packages:
+        filename = pkg.filename
+        if filename.endswith(".whl"):
+            try:
+                name, version, _build, tags = packaging.utils.parse_wheel_filename(filename)
+            except InvalidWheelFilename:
+                continue
+            if name != spec.name:
+                continue
+            versions.add(version)
+            wheels.append((pkg, version, tags))
+        else:
+            try:
+                name, version = packaging.utils.parse_sdist_filename(filename)
+            except (InvalidSdistFilename, packaging.utils.InvalidName):
+                continue
+            if name == spec.name:
+                versions.add(version)
+    return wheels, versions
+
+
+def _best_compatible(
+    wheels: list[tuple[DistributionPackage, frozenset[Tag]]], spec: WheelSpec
+) -> DistributionPackage | None:
+    """Return the best tag-compatible wheel for *spec*, or ``None``.
+
+    *wheels* pairs each candidate package with its parsed tags.
+    """
+    best_pkg: DistributionPackage | None = None
+    best_score = -1
+    for pkg, tags in wheels:
+        if not _wheels_compatible(spec.tags, tags):
+            continue
+        score = _best_tag_score(spec.tags, tags)
+        if score > best_score:
+            best_score = score
+            best_pkg = pkg
+            if best_score == 2:
+                break
+    return best_pkg
+
+
+def _sorted_version_strings(versions: typing.Iterable[Version]) -> tuple[str, ...]:
+    """Return version strings sorted in PEP 440 order."""
+    return tuple(str(v) for v in sorted(versions))
+
+
+def resolve_upstream(page: ProjectPage, spec: WheelSpec, index: str = "") -> Resolution:
+    """Resolve the upstream wheel to compare against *spec*.
+
+    Classifies the outcome so callers can produce actionable errors:
+
+    - **no version** -- the requested version is absent; raises
+      :class:`~retread._errors.VersionNotFoundError` listing the available
+      versions.
+    - **no matching wheel** -- the version exists only as a source
+      distribution; raises :class:`~retread._errors.NoWheelsError`.
+    - **matched** -- a tag-compatible wheel exists; returns a
+      :class:`Resolution` with :attr:`ResolutionStatus.MATCHED`.
+    - **fallback** -- the version has wheels but none match the downstream
+      tags; returns a :class:`Resolution` with
+      :attr:`ResolutionStatus.FALLBACK` and the available wheel tags, so the
+      caller can compare against a fallback wheel and report the mismatch.
+
+    A missing *project* is detected earlier (when the index is queried) and
+    raised as :class:`~retread._errors.ProjectNotFoundError`.
+    """
+    wheels, versions = _project_packages(page, spec)
+    if not any(_version_match(v, spec.version) for v in versions):
+        raise VersionNotFoundError(
+            spec.filename,
+            index,
+            str(spec.name),
+            str(spec.version),
+            _sorted_version_strings(versions),
+        )
+    version_wheels = [
+        (pkg, tags) for (pkg, version, tags) in wheels if _version_match(version, spec.version)
+    ]
+    if not version_wheels:
+        raise NoWheelsError(spec.filename, index, str(spec.name), str(spec.version))
+
+    best = _best_compatible(version_wheels, spec)
+    if best is not None:
+        return Resolution(ResolutionStatus.MATCHED, best, spec, index)
+
+    fallback_pkg, _ = max(version_wheels, key=lambda pt: (_fallback_rank(pt[1]), pt[0].filename))
+    available_tags = tuple(sorted({_wheel_tag_string(pkg.filename) for pkg, _ in version_wheels}))
+    return Resolution(ResolutionStatus.FALLBACK, fallback_pkg, spec, index, available_tags)
+
+
 def find_matching_wheel(
     page: ProjectPage, spec: WheelSpec, index: str = ""
 ) -> DistributionPackage:
-    """Find a wheel on a project page matching the given spec.
+    """Find a wheel on a project page whose name, version, and tags match *spec*.
 
-    Searches for a wheel with the same name, version, and compatible
-    tags.  If the downstream version carries a PEP 440 local segment
-    (e.g. ``1.5.0+rhaiv.5``), the public portion is matched so that
-    the base version (``1.5.0``) is found on the upstream index.
+    A strict, tag-compatible match.  If the downstream version carries a PEP 440
+    local segment (e.g. ``1.5.0+rhaiv.5``), the public portion is matched so the
+    base version (``1.5.0``) is found on the upstream index.
 
     Args:
         page: A :class:`pypi_simple.ProjectPage` to search.
@@ -253,28 +422,13 @@ def find_matching_wheel(
         The matching :class:`pypi_simple.DistributionPackage`.
 
     Raises:
-        WheelNotFoundError: If no matching wheel is found.
+        WheelNotFoundError: If no tag-compatible wheel is found.
     """
-    best_pkg: DistributionPackage | None = None
-    best_score = -1
-    for pkg in page.packages:
-        if not pkg.filename.endswith(".whl"):
-            continue
-        try:
-            name, version, _build, tags = packaging.utils.parse_wheel_filename(pkg.filename)
-        except InvalidWheelFilename:
-            continue
-        if (
-            name == spec.name
-            and _version_match(version, spec.version)
-            and _wheels_compatible(spec.tags, tags)
-        ):
-            score = _best_tag_score(spec.tags, tags)
-            if score > best_score:
-                best_score = score
-                best_pkg = pkg
-                if best_score == 2:
-                    break
-    if best_pkg is not None:
-        return best_pkg
+    wheels, _versions = _project_packages(page, spec)
+    version_wheels = [
+        (pkg, tags) for (pkg, version, tags) in wheels if _version_match(version, spec.version)
+    ]
+    best = _best_compatible(version_wheels, spec)
+    if best is not None:
+        return best
     raise WheelNotFoundError(spec.filename, index)

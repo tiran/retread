@@ -95,6 +95,11 @@ def _print_findings_trailer(result: Comparison) -> None:
     the block lives in one helper called from both branches.
     """
     analysis = result.analysis
+    if analysis.resolution_mismatches:
+        print(f"\nUpstream resolution mismatches ({len(analysis.resolution_mismatches)}):")
+        for m in analysis.resolution_mismatches:
+            suffix = " (ignored by policy)" if m.ignored else ""
+            print(f"  {m.message}{suffix}")
     if analysis.record_mismatches:
         print(f"\nRECORD mismatches ({len(analysis.record_mismatches)}):")
         for w in analysis.record_mismatches:

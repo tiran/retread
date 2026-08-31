@@ -198,25 +198,31 @@ class PrefixPairingChecker:
 
 
 class ExtensionPairingChecker:
-    """Pair extension modules that differ only in ABI suffix across sides.
+    """Pair extension modules that differ only in ABI or platform across sides.
 
     When upstream ships ``foo.abi3.so`` and downstream ships
     ``foo.cpython-312-x86_64-linux-gnu.so``, they are the same module linked
-    against different ABIs.  Paired modules that would otherwise be an ERROR
-    (a missing shared library) are downgraded to NOTICE.
+    against different ABIs.  The same holds across platforms: a Windows
+    ``foo.cp312-win_amd64.pyd`` and a Linux ``foo.cpython-312-...-gnu.so`` are
+    the same module built for different targets, so retread must not report one
+    as missing when the upstream release only ships wheels for another platform.
+    Paired modules that would otherwise be an ERROR (a missing extension) are
+    downgraded to NOTICE.
     """
 
     name = "extension-pairing"
     priority = 30
 
-    EXT_SUFFIX_RE: re.Pattern[str] = re.compile(r"(\.cpython-[^/]+\.so|\.abi3t?\.so|\.so)$")
+    EXT_SUFFIX_RE: re.Pattern[str] = re.compile(
+        r"(\.cpython-[^/]+\.so|\.abi3t?\.so|\.so|\.cp\d+-[^/]+\.pyd|\.pyd)$"
+    )
 
     @classmethod
     def extension_stem(cls, filename: str) -> str | None:
         """Extract the module stem from an extension module filename.
 
-        Returns the path without the ABI-specific suffix, or ``None`` if the
-        filename is not a recognized extension module.
+        Returns the path without the ABI- or platform-specific suffix, or
+        ``None`` if the filename is not a recognized extension module.
 
         Examples::
 
@@ -224,6 +230,8 @@ class ExtensionPairingChecker:
             foo/_bar.abi3.so                           ->  foo/_bar
             foo/_bar.abi3t.so                          ->  foo/_bar
             foo/_bar.so                                ->  foo/_bar
+            foo/_bar.cp312-win_amd64.pyd               ->  foo/_bar
+            foo/_bar.pyd                               ->  foo/_bar
             foo/bar.py                                 ->  None
         """
         m = cls.EXT_SUFFIX_RE.search(filename)
@@ -316,17 +324,19 @@ class DataChecker(ClassifierChecker):
 
 
 class AuditwheelChecker(SimpleClassifier):
-    """Classify auditwheel-vendored shared libraries in a ``*.libs/`` directory.
+    """Classify repair-tool-vendored shared libraries in a ``*.libs/`` directory.
 
-    auditwheel vendors external shared libraries as ``lib*.so*`` files directly
-    inside a root-level ``{dist}.libs/`` directory
-    (e.g. ``torchvision.libs/libcudart.faf08d9a.so.13``).  These files are
-    expected to appear or disappear between upstream and downstream builds.
+    auditwheel (Linux) and delvewheel (Windows) vendor external shared
+    libraries directly inside a root-level ``{dist}.libs/`` directory --
+    ``lib*.so*`` for Linux (e.g. ``torchvision.libs/libcudart.faf08d9a.so.13``)
+    and ``*.dll`` for Windows (e.g. ``psycopg2.libs/libpq-e0afd6a7.dll``).
+    These files are expected to appear or disappear between upstream and
+    downstream builds, including when the two target different platforms.
 
-    The match is deliberately strict: only ``lib*.so*`` files sitting directly
-    in a top-level ``*.libs/`` directory are claimed.  Other files that happen
-    to live in such a directory, or ``.libs`` directories nested under
-    subdirectories, fall through to the remaining classifiers.
+    The match is deliberately strict: only ``lib*.so*`` or ``*.dll`` files
+    sitting directly in a top-level ``*.libs/`` directory are claimed.  Other
+    files that happen to live in such a directory, or ``.libs`` directories
+    nested under subdirectories, fall through to the remaining classifiers.
     """
 
     name = "auditwheel"
@@ -334,15 +344,17 @@ class AuditwheelChecker(SimpleClassifier):
     classification = Classification.AUDITWHEEL
 
     LIBS_SUFFIX: str = ".libs"
-    LIB_GLOB: str = "lib*.so*"
+    LIB_GLOBS: tuple[str, ...] = ("lib*.so*", "*.dll")
 
     @classmethod
     def matches(cls, filename: str) -> bool:
-        """Return True for a ``lib*.so*`` file in a root-level ``*.libs/`` dir."""
+        """Return True for a vendored shared library in a root-level ``*.libs/`` dir."""
         parent, sep, base = filename.rpartition("/")
         if not sep or "/" in parent:
             return False
-        return parent.endswith(cls.LIBS_SUFFIX) and fnmatch.fnmatchcase(base, cls.LIB_GLOB)
+        if not parent.endswith(cls.LIBS_SUFFIX):
+            return False
+        return any(fnmatch.fnmatchcase(base, glob) for glob in cls.LIB_GLOBS)
 
 
 class TestChecker(SimpleClassifier):
@@ -361,21 +373,23 @@ class TestChecker(SimpleClassifier):
 
 
 class SharedLibraryChecker(PresenceClassifier):
-    """Classify shared libraries / extension modules (``.so``).
+    """Classify shared libraries / extension modules across platforms.
 
-    Matches both unversioned (``foo.so``) and versioned (``libfoo.so.1.2.3``)
-    shared-object names.
+    Matches Linux/macOS shared objects (``foo.so``, versioned
+    ``libfoo.so.1.2.3``), Windows extension modules and DLLs
+    (``foo.cp312-win_amd64.pyd``, ``foo.pyd``, ``foo.dll``), and macOS dynamic
+    libraries (``libfoo.dylib``, versioned ``libfoo.1.2.3.dylib``).
     """
 
     name = "shared-library"
     priority = 80
     classification = Classification.EXTENSION_MODULE
 
-    PATTERN: re.Pattern[str] = re.compile(r"\.so(\.[0-9.]+)?$")
+    PATTERN: re.Pattern[str] = re.compile(r"(\.so(\.[0-9.]+)?|\.pyd|\.dylib|\.dll)$")
 
     @classmethod
     def matches(cls, filename: str) -> bool:
-        """Return True if *filename* looks like a shared library."""
+        """Return True if *filename* looks like a shared library or extension."""
         return cls.PATTERN.search(filename) is not None
 
 

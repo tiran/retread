@@ -1,0 +1,13 @@
+# Downstream stamps its own build/release metadata at build time, so the
+# embedded version string in release_info.py differs from the upstream wheel.
+#
+# Upstream publishes only Windows and macOS binary wheels, so a downstream
+# Linux rebuild has no matching upstream wheel to compare against.
+# allow_cross_platform accepts validating the Linux rebuild against an
+# upstream Windows/macOS binary wheel instead of flagging the fallback.
+["*"]
+description = "Embedded build-time release metadata differs; upstream ships only Windows/macOS wheels"
+allow_cross_platform = true
+ignore_differences = [
+    "mariadb/release_info.py",
+]

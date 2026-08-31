@@ -61,6 +61,9 @@ def _parse_md(data: bytes):
         ("foo.so.1", True),
         ("libfoo.so.1.2.3", True),
         ("foo.so.0", True),
+        ("_foo.pyd", True),
+        ("libpq.dll", True),
+        ("foo.dylib", True),
         ("foo.py", False),
         ("foo.sol", False),
         ("foo.c", False),
@@ -77,11 +80,15 @@ def test_is_shared_library(filename: str, expected: bool) -> None:
         ("torchvision.libs/libcudart.faf08d9a.so.13", True),
         ("Pillow.libs/libpng16.so.16", True),
         ("foo.libs/libbar.so.1", True),
-        # Not a lib*.so* name.
+        # delvewheel vendors Windows DLLs into the same {dist}.libs/ dir.
+        ("psycopg2.libs/libpq-e0afd6a7.dll", True),
+        ("foo.libs/msvcp140.dll", True),
+        # Not a lib*.so* name (and not a .dll).
         ("foo.libs/bar.so", False),
         ("foo.libs/libbar.txt", False),
         # A .libs directory nested under a subdirectory, not the wheel root.
         ("foo/bar.libs/libbaz.so", False),
+        ("foo/bar.libs/foo.dll", False),
         ("foo/bar.so", False),
         ("foo.lib/libbar.so", False),
     ],
@@ -178,9 +185,14 @@ ERROR = Severity.ERROR
         ("foo-1.0.data/scripts/mybin", True, ERROR, Classification.DATA_SCRIPTS),
         ("foo-1.0.data/headers/foo.h", False, NOTICE, Classification.DATA),
         ("foo-1.0.data/data/resource.dat", True, ERROR, Classification.DATA),
-        # auditwheel (always NOTICE)
+        # auditwheel / delvewheel vendored libs (always NOTICE)
         ("foo.libs/libbar.so.1", False, NOTICE, Classification.AUDITWHEEL),
         ("foo.libs/libbar.so.1", True, NOTICE, Classification.AUDITWHEEL),
+        ("foo.libs/libpq-e0afd6a7.dll", False, NOTICE, Classification.AUDITWHEEL),
+        ("foo.libs/libpq-e0afd6a7.dll", True, NOTICE, Classification.AUDITWHEEL),
+        # a stray Windows DLL outside a .libs/ dir is a shared library
+        ("foo/libpq.dll", True, ERROR, Classification.EXTENSION_MODULE),
+        ("foo/libpq.dll", False, EXPECTED, Classification.EXTENSION_MODULE),
         # extension modules
         (
             "foo/_bar.cpython-312-x86_64-linux-gnu.so",
@@ -270,6 +282,10 @@ ERROR = Severity.ERROR
         "data-other-missing",
         "auditwheel-diff",
         "auditwheel-missing",
+        "auditwheel-dll-diff",
+        "auditwheel-dll-missing",
+        "stray-dll-missing",
+        "stray-dll-diff",
         "ext-module-diff",
         "ext-module-missing",
         "static-lib-diff",
@@ -753,14 +769,32 @@ def test_compare_dist_info_record_is_expected() -> None:
     ("filename", "expected"),
     [
         ("foo/_bar.cpython-312-x86_64-linux-gnu.so", "foo/_bar"),
+        ("foo/_bar.cpython-312-darwin.so", "foo/_bar"),
         ("foo/_bar.abi3.so", "foo/_bar"),
         ("foo/_bar.abi3t.so", "foo/_bar"),
         ("foo/_bar.so", "foo/_bar"),
+        ("foo/_bar.cp312-win_amd64.pyd", "foo/_bar"),
+        ("foo/_bar.pyd", "foo/_bar"),
         ("foo/bar.py", None),
         ("foo/bar.c", None),
         ("foo.libs/libbar.so.1", None),
+        # A macOS .dylib is a shared library, not an importable extension
+        # module, so it must not be paired.
+        ("foo/.dylibs/libbar.dylib", None),
     ],
-    ids=["cpython", "abi3", "abi3t", "bare-so", "python", "c-source", "versioned-so"],
+    ids=[
+        "cpython",
+        "macos-cpython",
+        "abi3",
+        "abi3t",
+        "bare-so",
+        "win-pyd",
+        "bare-pyd",
+        "python",
+        "c-source",
+        "versioned-so",
+        "macos-dylib",
+    ],
 )
 def test_extension_stem(filename: str, expected: str | None) -> None:
     assert extension_stem(filename) == expected
@@ -790,6 +824,61 @@ def test_compare_pairs_abi3_with_cpython_extension() -> None:
     assert analysis.only_downstream[0].filename == down_so
     assert analysis.only_downstream[0].severity is Severity.NOTICE
     assert analysis.only_downstream[0].classification is Classification.EXTENSION_MODULE
+
+
+def test_compare_pairs_windows_pyd_with_linux_so() -> None:
+    """A Windows .pyd and a Linux .so of the same module pair as NOTICE.
+
+    Mirrors the mariadb case: the upstream release ships only Windows wheels,
+    so the fallback compares ``_mariadb.cp314-win_amd64.pyd`` against the
+    downstream ``_mariadb.cpython-312-x86_64-linux-gnu.so``.  These are the
+    same module built for different platforms and must not be flagged as a
+    missing/extra extension.
+    """
+    up_pyd = "mariadb/_mariadb.cp314-win_amd64.pyd"
+    down_so = "mariadb/_mariadb.cpython-312-x86_64-linux-gnu.so"
+    up = {up_pyd: FakeInfo(up_pyd, crc=111, file_size=1000)}
+    down = {down_so: FakeInfo(down_so, crc=222, file_size=2000)}
+    result = run_compare(
+        upstream=UPSTREAM_URL,
+        downstream=DOWNSTREAM_URL,
+        upstream_infos=up,
+        downstream_infos=down,
+    )
+    analysis = result.analysis
+    assert len(analysis.only_upstream) == 1
+    assert analysis.only_upstream[0].filename == up_pyd
+    assert analysis.only_upstream[0].severity is Severity.NOTICE
+    assert analysis.only_upstream[0].classification is Classification.EXTENSION_MODULE
+    assert len(analysis.only_downstream) == 1
+    assert analysis.only_downstream[0].filename == down_so
+    assert analysis.only_downstream[0].severity is Severity.NOTICE
+    assert analysis.only_downstream[0].classification is Classification.EXTENSION_MODULE
+
+
+def test_compare_pairs_macos_so_with_linux_so() -> None:
+    """A macOS .so and a Linux .so of the same module pair as NOTICE.
+
+    macOS extension modules end in ``.so`` (e.g. ``_bar.cpython-312-darwin.so``),
+    so a macOS-only upstream release still pairs cleanly against a Linux rebuild.
+    """
+    up_so = "foo/_bar.cpython-312-darwin.so"
+    down_so = "foo/_bar.cpython-312-x86_64-linux-gnu.so"
+    up = {up_so: FakeInfo(up_so, crc=111, file_size=1000)}
+    down = {down_so: FakeInfo(down_so, crc=222, file_size=2000)}
+    result = run_compare(
+        upstream=UPSTREAM_URL,
+        downstream=DOWNSTREAM_URL,
+        upstream_infos=up,
+        downstream_infos=down,
+    )
+    analysis = result.analysis
+    assert len(analysis.only_upstream) == 1
+    assert analysis.only_upstream[0].filename == up_so
+    assert analysis.only_upstream[0].severity is Severity.NOTICE
+    assert len(analysis.only_downstream) == 1
+    assert analysis.only_downstream[0].filename == down_so
+    assert analysis.only_downstream[0].severity is Severity.NOTICE
 
 
 def test_compare_unpaired_extension_stays_error() -> None:
