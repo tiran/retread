@@ -1,5 +1,8 @@
-# Downstream builds mlserver from a modified source fork with adjusted
-# dependency version bounds.
+# Midstream fork of mlserver with adjusted dependency version bounds and
+# modified source files.
 ["*"]
-description = "Downstream fork: dependency version bounds differ"
+description = "Midstream fork: source files and dependency version bounds differ"
 ignore_dependency_metadata = true
+ignore_differences = [
+    "*",
+]

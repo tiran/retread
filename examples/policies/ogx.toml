@@ -1,4 +1,4 @@
-# Midstream fork of vllm-omni with adjusted dependency version bounds and
+# Midstream fork of ogx with adjusted dependency version bounds and
 # modified source files.
 ["*"]
 description = "Midstream fork: source files and dependency version bounds differ"

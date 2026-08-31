@@ -1,0 +1,8 @@
+# Midstream fork of this mlserver runtime, so its source files differ from
+# upstream.
+["*"]
+description = "Midstream fork: source files differ from upstream"
+ignore_dependency_metadata = true
+ignore_differences = [
+    "*",
+]

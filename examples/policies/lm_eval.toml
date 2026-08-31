@@ -1,5 +1,5 @@
-# Downstream builds lm-eval from a modified source fork that swaps some
-# optional dependency extras for a downstream integration.
+# Midstream fork of lm-eval that swaps some optional dependency extras for
+# a downstream integration.
 ["*"]
-description = "Downstream fork: optional dependency extras differ"
+description = "Midstream fork: optional dependency extras differ"
 ignore_dependency_metadata = true

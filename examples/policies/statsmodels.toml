@@ -1,0 +1,7 @@
+# The bundled statsmodels/setup.cfg differs between upstream and the
+# downstream rebuild (build-time configuration that has no runtime effect).
+["*"]
+description = "Ignore differing bundled statsmodels/setup.cfg"
+ignore_differences = [
+    "statsmodels/setup.cfg",
+]

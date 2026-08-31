@@ -1,0 +1,16 @@
+# The downstream rebuild links against the system libpdfium.so instead of
+# bundling the upstream-shipped copy, so pypdfium2_raw/libpdfium.so has no
+# downstream counterpart and the generated bindings and version metadata
+# differ accordingly.
+["*"]
+description = "Downstream uses the system libpdfium.so with regenerated bindings"
+allow_cross_platform = true
+platlib = true
+ignore_missing_downstream = [
+    "pypdfium2_raw/libpdfium.so",
+]
+ignore_differences = [
+    "pypdfium2/version.json",
+    "pypdfium2_raw/bindings.py",
+    "pypdfium2_raw/version.json",
+]
