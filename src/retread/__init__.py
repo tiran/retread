@@ -10,7 +10,7 @@ package indexes.
 Example
 -------
 
-High-level API — provide a downstream wheel URL and let retread resolve
+High-level API - provide a downstream wheel URL and let retread resolve
 the upstream automatically::
 
     from retread import sync_retread
@@ -19,24 +19,24 @@ the upstream automatically::
     if result.is_identical:
         print("Wheels are identical")
     else:
-        for diff in result.different:
+        for diff in result.analysis.different:
             print(f"CHANGED: {diff.filename}")
 
-Low-level API — manage your own RemoteZip objects::
+Low-level API - manage your own RemoteZip objects::
 
     from zipwire import AsyncRemoteZip
     from zipwire.backends import AiohttpReader
-    from retread import async_compare_wheels
+    from retread import Context, WheelInfo, compare
 
     async def main():
         upstream_url = "https://files.pythonhosted.org/.../foo-1.0-py3-none-any.whl"
         downstream_url = "https://rebuild.example/.../foo-1.0-py3-none-any.whl"
 
-        u_reader = AiohttpReader(upstream_url)
-        d_reader = AiohttpReader(downstream_url)
-        async with AsyncRemoteZip(u_reader) as upstream:
-            async with AsyncRemoteZip(d_reader) as downstream:
-                result = await async_compare_wheels(upstream, downstream)
+        async with AsyncRemoteZip(AiohttpReader(upstream_url)) as upstream:
+            async with AsyncRemoteZip(AiohttpReader(downstream_url)) as downstream:
+                up = await WheelInfo.from_async_remote(upstream)
+                down = await WheelInfo.from_async_remote(downstream)
+        result = compare(Context.default(), up, down)
 
 Backends
 --------
@@ -55,36 +55,45 @@ Asynchronous:
 """
 
 from retread._api import async_diff, async_retread, sync_diff, sync_retread
-from retread._compare import (
-    Classification,
-    FileDiff,
-    FileEntry,
-    MetadataFieldDiff,
-    Severity,
-    VenvBundle,
-    WheelComparison,
-    async_compare_wheels,
-    compare_wheels,
-)
+from retread._context import Context
+from retread._enums import Classification, Severity, Side
 from retread._errors import (
     ComparisonError,
+    InvalidMetadataError,
     InvalidWheelError,
     PolicyError,
     RetreadError,
     WheelNotFoundError,
 )
-from retread._platform import PlatformWarning
-from retread._policy import PackagePolicy, VersionPolicy, apply_policy, load_policy_dir
+from retread._findings import (
+    Analysis,
+    Comparison,
+    FileDiff,
+    FileEntry,
+    MetadataFieldDiff,
+    PlatformWarning,
+    RecordMismatch,
+    VenvBundle,
+)
+from retread._policy import PackagePolicy, VersionPolicy, load_policy_dir
 from retread._pypi import AsyncPyPISimple
-from retread._record import RecordMismatch
 from retread._resolve import WheelSpec, parse_wheel_spec
+from retread._types import Filename, Url
+from retread._wheel import FileStat, WheelInfo, WheelSource
+from retread.checker import compare
 
 __all__ = [
+    "Analysis",
     "AsyncPyPISimple",
     "Classification",
+    "Comparison",
     "ComparisonError",
+    "Context",
     "FileDiff",
     "FileEntry",
+    "FileStat",
+    "Filename",
+    "InvalidMetadataError",
     "InvalidWheelError",
     "MetadataFieldDiff",
     "PackagePolicy",
@@ -93,16 +102,17 @@ __all__ = [
     "RecordMismatch",
     "RetreadError",
     "Severity",
+    "Side",
+    "Url",
     "VenvBundle",
     "VersionPolicy",
-    "WheelComparison",
+    "WheelInfo",
     "WheelNotFoundError",
+    "WheelSource",
     "WheelSpec",
-    "apply_policy",
-    "async_compare_wheels",
     "async_diff",
     "async_retread",
-    "compare_wheels",
+    "compare",
     "load_policy_dir",
     "parse_wheel_spec",
     "sync_diff",

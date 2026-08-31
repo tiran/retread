@@ -24,7 +24,7 @@ classifiers = [
 ]
 dependencies = [
     "click>=8.1",
-    "zipwire[requests]>=0.2",
+    "zipwire[requests]>=0.4",
     "pypi-simple>=1.6",
     "packaging>=24",
 ]

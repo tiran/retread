@@ -11,15 +11,11 @@ import click
 
 from retread import backends
 from retread._api import async_diff, async_retread, sync_diff, sync_retread
-from retread._compare import (
-    Classification,
-    FileDiff,
-    FileEntry,
-    Severity,
-    WheelComparison,
-)
+from retread._enums import Classification, Severity
 from retread._errors import PolicyError, RetreadError
+from retread._findings import Comparison, FileDiff, FileEntry
 from retread._policy import load_policy_dir
+from retread._wheel import WheelInfo
 
 
 def _format_label(classification: Classification) -> str:
@@ -63,23 +59,25 @@ _SEVERITY_HEADERS = {
 _TYPE_HEADERS = ("upstream only", "downstream only", "different")
 
 
-def _print_venv_bundles(result: WheelComparison) -> None:
+def _print_venv_bundles(result: Comparison) -> None:
     """Print bundled virtual environments, if any."""
-    if not result.venv_bundles:
+    venv_bundles = result.analysis.venv_bundles
+    if not venv_bundles:
         return
-    print(f"\nBundled virtual environments ({len(result.venv_bundles)}):")
-    for b in result.venv_bundles:
+    print(f"\nBundled virtual environments ({len(venv_bundles)}):")
+    for b in venv_bundles:
         print(f"  [{b.side}] {_severity_label(b.severity)}: {b.path}")
 
 
-def _print_metadata_field_diffs(result: WheelComparison) -> None:
+def _print_metadata_field_diffs(result: Comparison) -> None:
     """Print normalized METADATA field differences, if any."""
-    if not result.metadata_field_diffs:
+    metadata_field_diffs = result.analysis.metadata_field_diffs
+    if not metadata_field_diffs:
         return
     print("\nMETADATA field differences:")
     sides = (("upstream only", "only_upstream"), ("downstream only", "only_downstream"))
     for label, attr in sides:
-        side_diffs = [d for d in result.metadata_field_diffs if getattr(d, attr)]
+        side_diffs = [d for d in metadata_field_diffs if getattr(d, attr)]
         if not side_diffs:
             continue
         print(f"  {label}:")
@@ -90,34 +88,87 @@ def _print_metadata_field_diffs(result: WheelComparison) -> None:
                 print(f"      {value}")
 
 
-def _print_comparison(result: WheelComparison) -> None:
+def _print_findings_trailer(result: Comparison) -> None:
+    """Print the RECORD, platform, venv, and METADATA findings.
+
+    These are shown after both the identical and non-identical summaries, so
+    the block lives in one helper called from both branches.
+    """
+    analysis = result.analysis
+    if analysis.record_mismatches:
+        print(f"\nRECORD mismatches ({len(analysis.record_mismatches)}):")
+        for w in analysis.record_mismatches:
+            print(f"  [{w.side}] {w.message}")
+    if analysis.platform_warnings:
+        print(f"\nPlatform warnings ({len(analysis.platform_warnings)}):")
+        for w in analysis.platform_warnings:
+            print(f"  [{w.side}] {w.message}")
+    _print_venv_bundles(result)
+    _print_metadata_field_diffs(result)
+
+
+def _format_size(num_bytes: int) -> str:
+    """Format a byte count as a human-readable SI size (kB, MB, ...).
+
+    Uses decimal SI units (powers of 1000).  Sizes below 1 kB are shown as a
+    plain byte count.
+    """
+    if num_bytes < 1000:
+        return f"{num_bytes} bytes"
+    value = float(num_bytes)
+    for unit in ("kB", "MB", "GB", "TB"):
+        value /= 1000
+        if value < 1000:
+            return f"{value:.1f} {unit}"
+    return f"{value:.1f} PB"
+
+
+def _print_wheel_line(label: str, wheel: WheelInfo) -> None:
+    """Print a wheel's filename and a compact line of index metadata."""
+    print(f"{label}{wheel.filename}")
+    origin = wheel.origin
+    details: list[str] = []
+    if origin.upload_time is not None:
+        # Upload date only (no time-of-day).
+        details.append(f"uploaded {origin.upload_time.date().isoformat()}")
+    if wheel.file_size:
+        details.append(_format_size(wheel.file_size))
+    if origin.provenance_url:
+        details.append("provenance")
+    if origin.has_sdist:
+        details.append("sdist")
+    if origin.wheel_tags:
+        details.append(f"{len(origin.wheel_tags)} wheel tags")
+    if details:
+        print(f"    {', '.join(details)}")
+
+
+def _print_comparison(result: Comparison) -> None:
     """Print a wheel comparison result grouped by severity."""
-    print(f"Upstream:   {result.upstream_wheel}")
-    print(f"Downstream: {result.downstream_wheel}")
+    analysis = result.analysis
+    _print_wheel_line("Upstream:   ", result.upstream)
+    _print_wheel_line("Downstream: ", result.downstream)
     if result.is_identical:
         print("Wheels are identical.")
-        print(f"  {len(result.identical)} files match")
-        if result.record_mismatches:
-            print(f"\nRECORD mismatches ({len(result.record_mismatches)}):")
-            for w in result.record_mismatches:
-                print(f"  [{w.side}] {w.message}")
-        if result.platform_warnings:
-            print(f"\nPlatform warnings ({len(result.platform_warnings)}):")
-            for w in result.platform_warnings:
-                print(f"  [{w.side}] {w.message}")
-        _print_venv_bundles(result)
-        _print_metadata_field_diffs(result)
+        print(f"  {len(analysis.identical)} files match")
+        _print_findings_trailer(result)
         return
 
     # Collect items grouped by severity, then by type.
     groups: dict[Severity, dict[str, list[str]]] = {
         s: {t: [] for t in _TYPE_HEADERS} for s in _SEVERITY_ORDER
     }
-    for entry in result.only_upstream:
+    for entry in analysis.only_upstream:
+        if entry.hidden:
+            continue
         groups[entry.severity]["upstream only"].append(_format_entry(entry))
-    for entry in result.only_downstream:
+    for entry in analysis.only_downstream:
+        if entry.hidden:
+            continue
         groups[entry.severity]["downstream only"].append(_format_entry(entry))
-    for diff in result.different:
+    for diff in analysis.different:
+        if diff.hidden:
+            continue
         groups[diff.severity]["different"].append(_format_diff(diff))
 
     for severity in _SEVERITY_ORDER:
@@ -134,20 +185,9 @@ def _print_comparison(result: WheelComparison) -> None:
                 for line in items:
                     print(line)
 
-    print(f"\nIdentical: {len(result.identical)}")
+    print(f"\nIdentical: {len(analysis.identical)}")
 
-    if result.record_mismatches:
-        print(f"\nRECORD mismatches ({len(result.record_mismatches)}):")
-        for w in result.record_mismatches:
-            print(f"  [{w.side}] {w.message}")
-
-    if result.platform_warnings:
-        print(f"\nPlatform warnings ({len(result.platform_warnings)}):")
-        for w in result.platform_warnings:
-            print(f"  [{w.side}] {w.message}")
-
-    _print_venv_bundles(result)
-    _print_metadata_field_diffs(result)
+    _print_findings_trailer(result)
 
     if result.has_errors:
         print("\nResult: ERRORS found")
@@ -155,7 +195,7 @@ def _print_comparison(result: WheelComparison) -> None:
         print("\nResult: OK (notices only)")
 
 
-def _print_json(result: WheelComparison) -> None:
+def _print_json(result: Comparison) -> None:
     """Print a wheel comparison result as JSON."""
     json.dump(result.to_dict(), sys.stdout, indent=2)
     print()
@@ -169,13 +209,12 @@ def _print_file_diff(
     downstream_label: str,
 ) -> None:
     """Print a unified diff or status message for a single file."""
+    print(f"--- {filename} ---")
     if upstream_bytes is None and downstream_bytes is None:
-        print(f"--- {filename} ---")
         print("File not found in either wheel.")
         return
 
     if upstream_bytes is None:
-        print(f"--- {filename} ---")
         print(f"Only in downstream: {downstream_label}")
         try:
             text = downstream_bytes.decode("utf-8")  # type: ignore[union-attr]
@@ -186,7 +225,6 @@ def _print_file_diff(
         return
 
     if downstream_bytes is None:
-        print(f"--- {filename} ---")
         print(f"Only in upstream: {upstream_label}")
         try:
             text = upstream_bytes.decode("utf-8")
@@ -197,7 +235,6 @@ def _print_file_diff(
         return
 
     if upstream_bytes == downstream_bytes:
-        print(f"--- {filename} ---")
         print("Files are identical.")
         return
 
@@ -206,7 +243,6 @@ def _print_file_diff(
         upstream_text = upstream_bytes.decode("utf-8")
         downstream_text = downstream_bytes.decode("utf-8")
     except (UnicodeDecodeError, ValueError):
-        print(f"--- {filename} ---")
         print("Binary files differ.")
         return
 
@@ -232,7 +268,7 @@ def _run_sync(
     downstream_index: str | None,
     upstream_index: str,
     policy: dict | None = None,
-) -> WheelComparison:
+) -> Comparison:
     backend_cls = getattr(backends, _SYNC_BACKENDS[backend_name])
     with backend_cls() as be:
         return sync_retread(
@@ -250,7 +286,7 @@ async def _run_async(
     downstream_index: str | None,
     upstream_index: str,
     policy: dict | None = None,
-) -> WheelComparison:
+) -> Comparison:
     backend_cls = getattr(backends, _ASYNC_BACKENDS[backend_name])
     async with backend_cls() as be:
         return await async_retread(

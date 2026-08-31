@@ -3,22 +3,23 @@
 import json
 
 import pytest
-from packaging.version import Version
 
-from retread.__main__ import (
-    _format_label,
-    _print_comparison,
-    _print_json,
-)
-from retread._compare import (
+from retread import (
     Classification,
+    Comparison,
     FileDiff,
     FileEntry,
     MetadataFieldDiff,
     RecordMismatch,
     Severity,
-    WheelComparison,
 )
+from retread.__main__ import (
+    _format_label,
+    _print_comparison,
+    _print_json,
+)
+
+from .conftest import make_comparison
 
 # --- _format_label ---
 
@@ -34,14 +35,14 @@ def test_format_label(classification: Classification, expected: str) -> None:
 # --- _print_comparison ---
 
 
-def test_print_comparison_identical(capsys, identical_result: WheelComparison) -> None:
+def test_print_comparison_identical(capsys, identical_result: Comparison) -> None:
     _print_comparison(identical_result)
     out = capsys.readouterr().out
     assert "Wheels are identical." in out
     assert "2 files match" in out
 
 
-def test_print_comparison_errors_and_notices(capsys, error_result: WheelComparison) -> None:
+def test_print_comparison_errors_and_notices(capsys, error_result: Comparison) -> None:
     _print_comparison(error_result)
     out = capsys.readouterr().out
     assert "Errors (1):" in out
@@ -56,7 +57,7 @@ def test_print_comparison_errors_and_notices(capsys, error_result: WheelComparis
     assert "ERRORS found" in out
 
 
-def test_print_comparison_notice_only(capsys, notice_only_result: WheelComparison) -> None:
+def test_print_comparison_notice_only(capsys, notice_only_result: Comparison) -> None:
     _print_comparison(notice_only_result)
     out = capsys.readouterr().out
     assert "Notices (1):" in out
@@ -80,14 +81,11 @@ def test_print_comparison_notice_only(capsys, notice_only_result: WheelCompariso
 def test_print_comparison_size_info(
     capsys, up_size: int, down_size: int, expect_bytes: bool
 ) -> None:
-    result = WheelComparison(
+    result = make_comparison(
         upstream="up",
         downstream="down",
         upstream_wheel="foo-1.0-py3-none-any.whl",
         downstream_wheel="foo-1.0-py3-none-any.whl",
-        dist="foo",
-        upstream_version=Version("1.0"),
-        downstream_version=Version("1.0"),
         only_upstream=(),
         only_downstream=(),
         different=(
@@ -109,14 +107,11 @@ def test_print_comparison_size_info(
 
 
 def test_print_comparison_downstream_only(capsys) -> None:
-    result = WheelComparison(
+    result = make_comparison(
         upstream="up",
         downstream="down",
         upstream_wheel="foo-1.0-py3-none-any.whl",
         downstream_wheel="foo-1.0-py3-none-any.whl",
-        dist="foo",
-        upstream_version=Version("1.0"),
-        downstream_version=Version("1.0"),
         only_upstream=(),
         only_downstream=(FileEntry("extra.py", Severity.ERROR, Classification.OTHER),),
         different=(),
@@ -133,7 +128,7 @@ def test_print_comparison_downstream_only(capsys) -> None:
 # --- _print_json ---
 
 
-def test_print_json_errors(capsys, error_result: WheelComparison) -> None:
+def test_print_json_errors(capsys, error_result: Comparison) -> None:
     _print_json(error_result)
     data = json.loads(capsys.readouterr().out)
     assert data["has_errors"] is True
@@ -146,7 +141,7 @@ def test_print_json_errors(capsys, error_result: WheelComparison) -> None:
     assert len(data["different"]) == 1
 
 
-def test_print_json_notice_only(capsys, notice_only_result: WheelComparison) -> None:
+def test_print_json_notice_only(capsys, notice_only_result: Comparison) -> None:
     _print_json(notice_only_result)
     data = json.loads(capsys.readouterr().out)
     assert data["has_errors"] is False
@@ -158,18 +153,15 @@ def test_print_json_notice_only(capsys, notice_only_result: WheelComparison) -> 
 # --- metadata field diffs ---
 
 
-def _metadata_diff_result() -> WheelComparison:
+def _metadata_diff_result() -> Comparison:
     diff = FileDiff(
         "foo-1.0.dist-info/METADATA", 100, 200, 111, 222, Severity.ERROR, Classification.METADATA
     )
-    return WheelComparison(
+    return make_comparison(
         upstream="up",
         downstream="down",
         upstream_wheel="foo-1.0-py3-none-any.whl",
         downstream_wheel="foo-1.0-py3-none-any.whl",
-        dist="foo",
-        upstream_version=Version("1.0"),
-        downstream_version=Version("1.0"),
         only_upstream=(),
         only_downstream=(),
         different=(diff,),
@@ -231,14 +223,11 @@ def test_main_help(invoke_cli) -> None:
 
 
 def test_print_comparison_record_mismatches(capsys) -> None:
-    result = WheelComparison(
+    result = make_comparison(
         upstream="up",
         downstream="down",
         upstream_wheel="foo-1.0-py3-none-any.whl",
         downstream_wheel="foo-1.0-py3-none-any.whl",
-        dist="foo",
-        upstream_version=Version("1.0"),
-        downstream_version=Version("1.0"),
         only_upstream=(),
         only_downstream=(),
         different=(),
@@ -256,14 +245,11 @@ def test_print_comparison_record_mismatches(capsys) -> None:
 
 
 def test_print_comparison_record_mismatches_with_diffs(capsys) -> None:
-    result = WheelComparison(
+    result = make_comparison(
         upstream="up",
         downstream="down",
         upstream_wheel="foo-1.0-py3-none-any.whl",
         downstream_wheel="foo-1.0-py3-none-any.whl",
-        dist="foo",
-        upstream_version=Version("1.0"),
-        downstream_version=Version("1.0"),
         only_upstream=(),
         only_downstream=(),
         different=(
@@ -287,14 +273,11 @@ def test_print_comparison_record_mismatches_with_diffs(capsys) -> None:
 
 
 def test_print_json_record_mismatches(capsys) -> None:
-    result = WheelComparison(
+    result = make_comparison(
         upstream="up",
         downstream="down",
         upstream_wheel="foo-1.0-py3-none-any.whl",
         downstream_wheel="foo-1.0-py3-none-any.whl",
-        dist="foo",
-        upstream_version=Version("1.0"),
-        downstream_version=Version("1.0"),
         only_upstream=(),
         only_downstream=(),
         different=(),
@@ -310,14 +293,11 @@ def test_print_json_record_mismatches(capsys) -> None:
 
 
 def test_print_json_no_record_mismatches(capsys) -> None:
-    result = WheelComparison(
+    result = make_comparison(
         upstream="up",
         downstream="down",
         upstream_wheel="foo-1.0-py3-none-any.whl",
         downstream_wheel="foo-1.0-py3-none-any.whl",
-        dist="foo",
-        upstream_version=Version("1.0"),
-        downstream_version=Version("1.0"),
         only_upstream=(),
         only_downstream=(),
         different=(),

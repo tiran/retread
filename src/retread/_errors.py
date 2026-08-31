@@ -22,6 +22,10 @@ class InvalidWheelError(RetreadError):
         super().__init__(f"Invalid wheel filename: {filename}")
 
 
+class InvalidMetadataError(RetreadError):
+    """A wheel's METADATA file is malformed (missing or invalid core fields)."""
+
+
 class ComparisonError(RetreadError):
     """An error occurred during wheel comparison."""
 

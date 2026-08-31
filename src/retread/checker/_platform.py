@@ -1,72 +1,31 @@
-"""Platform and ABI consistency checks for wheel files.
+"""Platform and ABI consistency checker.
 
-Validates that wheel tags, ``Root-Is-Purelib``, and file contents
-(extension modules, shared libraries) are internally consistent.
-These are per-wheel structural checks, not cross-wheel comparisons.
+Validates that each wheel's tags, ``Root-Is-Purelib``, and file contents
+(extension modules, shared libraries) are internally consistent.  These are
+per-wheel structural checks, not cross-wheel comparisons.
 """
 
 from __future__ import annotations
 
-import dataclasses
-import email.parser
 import logging
 import re
 import typing
-from typing import Any
 
-import packaging.utils
-from packaging.metadata import parse_email
-from packaging.utils import InvalidWheelFilename, canonicalize_name
-from packaging.version import Version
+from packaging.utils import canonicalize_name
+from packaging.version import InvalidVersion, Version
 
-from retread._resolve import _extract_raw_version
+from retread._enums import Side
+from retread._findings import NO_SHARED_LIBS_WARNING, PlatformWarning
 
 if typing.TYPE_CHECKING:
-    from packaging.tags import Tag
-
-    from retread._compare import WheelComparison
+    from retread._findings import Comparison
+    from retread._wheel import WheelInfo
+    from retread.checker._engine import Pool
 
 logger = logging.getLogger(__name__)
 
 _CPYTHON_EXT_RE = re.compile(r"\.cpython-(\d+\w?)-(.+)\.so$")
 _SHARED_LIB_RE = re.compile(r"\.so(\.[0-9.]+)?$")
-
-# Threshold for the large scripts heuristic.  Files in data/scripts/
-# above this size suggest native executables rather than interpreted
-# scripts.  64 KiB avoids false positives for large Python scripts
-# like pdfminer.six pdf2txt.py (~30 KiB), pyelftools readelf.py
-# (~23 KiB), and xlrd runxlrd.py (~14 KiB).
-_LARGE_SCRIPT_THRESHOLD = 65536
-
-
-@dataclasses.dataclass(frozen=True, slots=True)
-class PlatformWarning:
-    """A platform or ABI consistency issue found in a wheel."""
-
-    side: str  # "upstream" or "downstream"
-    message: str
-
-
-# Canonical message for a platform-specific wheel that ships no shared
-# libraries or native extensions.  Defined here as the single source of
-# truth so the ``platlib`` policy key can match it exactly (see
-# ``retread._policy``) without duplicating the wording.
-NO_SHARED_LIBS_WARNING = (
-    "wheel has platform-specific tags but contains no shared libraries or native extensions"
-)
-
-
-def _parse_wheel_tags(wheel_bytes: bytes) -> tuple[bool, list[str]]:
-    """Parse a WHEEL file and extract Root-Is-Purelib and Tag values.
-
-    Returns ``(root_is_purelib, tags)`` where *tags* is a list of
-    tag strings like ``"cp312-cp312-linux_x86_64"``.
-    """
-    parser = email.parser.BytesParser()
-    msg = parser.parsebytes(wheel_bytes)
-    root_is_purelib = msg.get("Root-Is-Purelib", "false").strip().lower() == "true"
-    tags = msg.get_all("Tag") or []
-    return root_is_purelib, [t.strip() for t in tags]
 
 
 def _expand_compound_tags(tags: list[str]) -> set[str]:
@@ -102,15 +61,7 @@ def _expand_compound_tags(tags: list[str]) -> set[str]:
 
 
 def _check_single_wheel(
-    side: str,
-    infos: dict[str, Any],
-    wheel_bytes: bytes | None,
-    filename_tags: frozenset[Tag],
-    dist: str,
-    version: str,
-    *,
-    metadata_bytes: bytes | None = None,
-    wheel_filename: str = "",
+    side: Side, wheel: WheelInfo, large_script_threshold: int
 ) -> list[PlatformWarning]:
     """Check a single wheel for platform and ABI consistency.
 
@@ -120,48 +71,56 @@ def _check_single_wheel(
     and that the METADATA Name and Version match the wheel filename.
     """
     warnings: list[PlatformWarning] = []
+    dist = wheel.dist
+    normalized_ver = str(wheel.version)
+    raw_ver = wheel.raw_version
+    filename_tags = wheel.tags
+    names = wheel.names
 
     # Version normalization check
-    if wheel_filename:
-        raw_ver = _extract_raw_version(wheel_filename)
-        normalized_ver = str(Version(raw_ver))
-        if normalized_ver != raw_ver:
+    if normalized_ver != raw_ver:
+        warnings.append(
+            PlatformWarning(
+                side,
+                f"wheel filename version '{raw_ver}' is not normalized"
+                f" (expected '{normalized_ver}')",
+            )
+        )
+
+    # METADATA Name and Version must be present and match the filename
+    if wheel.metadata_fields is not None:
+        meta = wheel.metadata_fields
+        meta_version = meta.get("version", "")
+        # Compare parsed versions so that equivalent spellings (e.g. 1.0 vs
+        # 1.0.0) do not produce a spurious mismatch.  An unparseable METADATA
+        # version is reported as-is rather than crashing the check.
+        try:
+            version_matches = Version(meta_version) == wheel.version
+        except InvalidVersion:
+            version_matches = False
+        if not version_matches:
             warnings.append(
                 PlatformWarning(
                     side,
-                    f"wheel filename version '{raw_ver}' is not normalized"
-                    f" (expected '{normalized_ver}')",
+                    f"METADATA Version '{meta_version}' does not match"
+                    f" filename version '{normalized_ver}'",
                 )
             )
-
-        # METADATA Name and Version must be present and match the filename
-        if metadata_bytes is not None:
-            meta, _ = parse_email(metadata_bytes)
-            meta_version = meta.get("version", "")
-            if meta_version != normalized_ver:
-                warnings.append(
-                    PlatformWarning(
-                        side,
-                        f"METADATA Version '{meta_version}' does not match"
-                        f" filename version '{normalized_ver}'",
-                    )
+        meta_name = meta.get("name", "")
+        if canonicalize_name(meta_name) != canonicalize_name(dist):
+            warnings.append(
+                PlatformWarning(
+                    side,
+                    f"METADATA Name '{meta_name}' does not match filename distribution '{dist}'",
                 )
-            meta_name = meta.get("name", "")
-            if canonicalize_name(meta_name) != canonicalize_name(dist):
-                warnings.append(
-                    PlatformWarning(
-                        side,
-                        f"METADATA Name '{meta_name}' does not match"
-                        f" filename distribution '{dist}'",
-                    )
-                )
+            )
 
     has_shared_libs = False
     cpython_versions: set[str] = set()
     has_abi3 = False
     has_abi3t = False
 
-    for fname in infos:
+    for fname in names:
         if any(part.endswith(".libs") for part in fname.split("/")):
             continue
 
@@ -185,18 +144,16 @@ def _check_single_wheel(
             has_shared_libs = True
 
     # Scripts heuristic: large files in data/scripts/ suggest platlib
-    scripts_prefix = f"{dist}-{version}.data/scripts/"
+    scripts_prefix = f"{dist}-{raw_ver}.data/scripts/"
     has_large_scripts = any(
-        info.file_size > _LARGE_SCRIPT_THRESHOLD
-        for fname, info in infos.items()
-        if fname.startswith(scripts_prefix)
+        stat.size > large_script_threshold
+        for path, stat in wheel.files.items()
+        if str(path).startswith(scripts_prefix)
     )
 
-    # Parse WHEEL file if available
-    root_is_purelib = False
-    wheel_tags: list[str] = []
-    if wheel_bytes is not None:
-        root_is_purelib, wheel_tags = _parse_wheel_tags(wheel_bytes)
+    has_wheel = wheel.di_wheel is not None
+    root_is_purelib = wheel.root_is_purelib
+    wheel_tags = wheel.wheel_tags
 
     # Check 0: WHEEL Tag entries must match filename tags
     if wheel_tags and filename_tags:
@@ -232,7 +189,7 @@ def _check_single_wheel(
 
     if has_shared_libs:
         # Check 1: shared libs should not be in a purelib wheel
-        if wheel_bytes is not None and root_is_purelib:
+        if has_wheel and root_is_purelib:
             warnings.append(
                 PlatformWarning(
                     side,
@@ -264,7 +221,7 @@ def _check_single_wheel(
                 )
 
         # Check 4: abi3/abi3t extensions require abi3 tag and cpython interpreter.
-        # Skip when cpython-specific extensions are also present — the
+        # Skip when cpython-specific extensions are also present -- the
         # version-specific tags (e.g. cp312-cp312) are correct for those
         # and the abi3 extensions are compatible with any cpython version.
         if (has_abi3 or has_abi3t) and not cpython_versions:
@@ -290,7 +247,7 @@ def _check_single_wheel(
     if (
         has_large_scripts
         and not has_shared_libs
-        and ((wheel_bytes is not None and root_is_purelib) or tag_platforms == {"any"})
+        and ((has_wheel and root_is_purelib) or tag_platforms == {"any"})
     ):
         warnings.append(
             PlatformWarning(
@@ -304,68 +261,27 @@ def _check_single_wheel(
     return warnings
 
 
-def check_platform_abi(
-    result: WheelComparison,
-    *,
-    upstream_infos: dict[str, Any],
-    downstream_infos: dict[str, Any],
-    upstream_wheel: bytes | None = None,
-    downstream_wheel: bytes | None = None,
-    upstream_metadata: bytes | None = None,
-    downstream_metadata: bytes | None = None,
-) -> WheelComparison:
+class PlatformChecker:
     """Validate platform and ABI consistency for both wheels.
 
-    Reads the ``WHEEL`` file from each side and cross-checks
-    ``Root-Is-Purelib`` and tag entries against the actual file
-    contents of the wheel (shared libraries, extension modules).
-    Also validates version normalization and METADATA version
-    consistency.
+    Cross-checks each wheel's ``Root-Is-Purelib`` and WHEEL tag entries
+    against its actual file contents (shared libraries, extension modules),
+    and validates version normalization and METADATA version consistency.
     """
-    warnings: list[PlatformWarning] = []
 
-    try:
-        _, _, _, upstream_tags = packaging.utils.parse_wheel_filename(result.upstream_wheel)
-    except InvalidWheelFilename:
-        upstream_tags = frozenset()
+    name = "platform"
+    priority = 220
 
-    try:
-        _, _, _, downstream_tags = packaging.utils.parse_wheel_filename(result.downstream_wheel)
-    except InvalidWheelFilename:
-        downstream_tags = frozenset()
-
-    up_version = str(result.upstream_version)
-    down_version = str(result.downstream_version)
-
-    upstream_warnings = _check_single_wheel(
-        "upstream",
-        upstream_infos,
-        upstream_wheel,
-        upstream_tags,
-        result.upstream_dist,
-        up_version,
-        metadata_bytes=upstream_metadata,
-        wheel_filename=result.upstream_wheel,
-    )
-    for w in upstream_warnings:
-        logger.info("platform check [%s]: %s", w.side, w.message)
-    warnings.extend(upstream_warnings)
-
-    downstream_warnings = _check_single_wheel(
-        "downstream",
-        downstream_infos,
-        downstream_wheel,
-        downstream_tags,
-        result.downstream_dist,
-        down_version,
-        metadata_bytes=downstream_metadata,
-        wheel_filename=result.downstream_wheel,
-    )
-    for w in downstream_warnings:
-        logger.info("platform check [%s]: %s", w.side, w.message)
-    warnings.extend(downstream_warnings)
-
-    if not warnings:
-        return result
-
-    return dataclasses.replace(result, platform_warnings=tuple(warnings))
+    def check(self, comparison: Comparison, pool: Pool) -> None:
+        warnings: list[PlatformWarning] = []
+        threshold = comparison.context.large_script_threshold
+        for side, wheel in (
+            (Side.UPSTREAM, comparison.upstream),
+            (Side.DOWNSTREAM, comparison.downstream),
+        ):
+            side_warnings = _check_single_wheel(side, wheel, threshold)
+            for w in side_warnings:
+                logger.info("platform check [%s]: %s", w.side, w.message)
+            warnings.extend(side_warnings)
+        if warnings:
+            comparison.analysis.platform_warnings.extend(warnings)

@@ -6,35 +6,74 @@ Orchestrates wheel resolution, backend management, and comparison.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
-import pathlib
 import typing
-import zipfile
 
 import pypi_simple
 
-from retread._compare import (
-    WheelComparison,
-    async_compare_local_wheel,
-    async_compare_wheels,
-    compare_local_wheel,
-    compare_wheels,
-)
+from retread._context import Context
 from retread._errors import ComparisonError, RetreadError
-from retread._policy import apply_policy, lookup_policy
 from retread._resolve import (
     _is_url,
     _wheel_basename,
     find_matching_wheel,
     parse_wheel_spec,
 )
+from retread._types import Filename, Url
+from retread._wheel import WheelInfo, WheelSource
+from retread.checker import compare
 
 if typing.TYPE_CHECKING:
-    from retread._types import AsyncBackend, SyncBackend
+    import pathlib
+
+    from retread._backend import AsyncBackend, SyncBackend
+    from retread._findings import Comparison
+    from retread._policy import PackagePolicy
 
 logger = logging.getLogger(__name__)
 
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _Resolved:
+    """A resolved wheel to load: where to open it plus its index metadata."""
+
+    source: str  # URL or local path to open
+    is_local: bool
+    origin: WheelSource
+
+
 PYPI_SIMPLE_ENDPOINT = pypi_simple.PYPI_SIMPLE_ENDPOINT
+
+
+def _sync_reader(backend: SyncBackend, source: str, is_local: bool) -> typing.Any:
+    """Build a sync reader for *source*: a local FileReader or an HTTP reader."""
+    if is_local:
+        from zipwire.backends import FileReader
+
+        return FileReader(source)
+    return backend.wheel_reader(source)
+
+
+def _async_reader(backend: AsyncBackend, source: str, is_local: bool) -> typing.Any:
+    """Build an async reader for *source*: a local AsyncFileReader or HTTP reader."""
+    if is_local:
+        from zipwire.backends import AsyncFileReader
+
+        return AsyncFileReader(source)
+    return backend.wheel_reader(source)
+
+
+def _local_downstream(downstream_str: str) -> _Resolved:
+    """Resolve a downstream wheel when no downstream index is given.
+
+    A URL is used as-is (remote); anything else is treated as a local file
+    path.  Either way no index metadata is available, so the origin is
+    source-only.
+    """
+    is_local = not _is_url(downstream_str)
+    source: Url | Filename = Filename(downstream_str) if is_local else Url(downstream_str)
+    return _Resolved(source=downstream_str, is_local=is_local, origin=WheelSource.local(source))
 
 
 def _resolve_wheels(
@@ -43,10 +82,10 @@ def _resolve_wheels(
     *,
     downstream_index: str | None = None,
     upstream_index: str = PYPI_SIMPLE_ENDPOINT,
-) -> tuple[str, str, bool]:
-    """Resolve upstream URL and downstream source.
+) -> tuple[_Resolved, _Resolved]:
+    """Resolve the upstream and downstream wheels to load.
 
-    Returns ``(upstream_url, downstream_source, is_local)``.
+    Returns ``(upstream, downstream)`` as :class:`_Resolved` objects.
     """
     downstream_str = str(downstream)
     downstream_filename = _wheel_basename(downstream_str)
@@ -57,24 +96,27 @@ def _resolve_wheels(
     pypi = backend.pypi_client(endpoint=upstream_index)
     upstream_page = pypi.get_project_page(str(spec.name))
     upstream_pkg = find_matching_wheel(upstream_page, spec, index=upstream_index)
-    upstream_url = upstream_pkg.url
-    logger.info("Upstream wheel: %s", upstream_url)
+    upstream = _Resolved(
+        source=upstream_pkg.url,
+        is_local=False,
+        origin=WheelSource.from_package(upstream_pkg, upstream_page),
+    )
+    logger.info("Upstream wheel: %s", upstream.source)
 
     # Determine downstream source type
     if downstream_index is not None:
         ds_pypi = backend.pypi_client(endpoint=downstream_index)
         ds_page = ds_pypi.get_project_page(str(spec.name))
         ds_pkg = find_matching_wheel(ds_page, spec, index=downstream_index)
-        downstream_source = ds_pkg.url
-        is_local = False
-    elif _is_url(downstream_str):
-        downstream_source = downstream_str
-        is_local = False
+        downstream_resolved = _Resolved(
+            source=ds_pkg.url,
+            is_local=False,
+            origin=WheelSource.from_package(ds_pkg, ds_page),
+        )
     else:
-        downstream_source = str(downstream)
-        is_local = True
+        downstream_resolved = _local_downstream(downstream_str)
 
-    return upstream_url, downstream_source, is_local
+    return upstream, downstream_resolved
 
 
 async def _async_resolve_wheels(
@@ -83,7 +125,7 @@ async def _async_resolve_wheels(
     *,
     downstream_index: str | None = None,
     upstream_index: str = PYPI_SIMPLE_ENDPOINT,
-) -> tuple[str, str, bool]:
+) -> tuple[_Resolved, _Resolved]:
     """Async version of :func:`_resolve_wheels`."""
     downstream_str = str(downstream)
     downstream_filename = _wheel_basename(downstream_str)
@@ -100,21 +142,24 @@ async def _async_resolve_wheels(
     else:
         upstream_page = await pypi.get_project_page(str(spec.name))
     upstream_pkg = find_matching_wheel(upstream_page, spec, index=upstream_index)
-    upstream_url = upstream_pkg.url
-    logger.info("Upstream wheel: %s", upstream_url)
+    upstream = _Resolved(
+        source=upstream_pkg.url,
+        is_local=False,
+        origin=WheelSource.from_package(upstream_pkg, upstream_page),
+    )
+    logger.info("Upstream wheel: %s", upstream.source)
 
     if downstream_index is not None:
         ds_pkg = find_matching_wheel(ds_page, spec, index=downstream_index)
-        downstream_source = ds_pkg.url
-        is_local = False
-    elif _is_url(downstream_str):
-        downstream_source = downstream_str
-        is_local = False
+        downstream_resolved = _Resolved(
+            source=ds_pkg.url,
+            is_local=False,
+            origin=WheelSource.from_package(ds_pkg, ds_page),
+        )
     else:
-        downstream_source = str(downstream)
-        is_local = True
+        downstream_resolved = _local_downstream(downstream_str)
 
-    return upstream_url, downstream_source, is_local
+    return upstream, downstream_resolved
 
 
 def sync_retread(
@@ -123,8 +168,8 @@ def sync_retread(
     downstream_index: str | None = None,
     upstream_index: str = PYPI_SIMPLE_ENDPOINT,
     backend: SyncBackend | None = None,
-    policy: dict | None = None,
-) -> WheelComparison:
+    policy: dict[str, PackagePolicy] | None = None,
+) -> Comparison:
     """Compare a downstream wheel against its upstream source.
 
     The downstream wheel can be specified as:
@@ -143,7 +188,7 @@ def sync_retread(
             :class:`~retread.backends.RequestsBackend` is created.
 
     Returns:
-        A :class:`WheelComparison` result.
+        A :class:`~retread.Comparison` result.
     """
     # SyncRemoteZip (not SyncRemoteWheel) -- retread compares all files
     # via infolist(), not just dist-info. The adaptive tail fetch in
@@ -158,25 +203,23 @@ def sync_retread(
         backend = RequestsBackend()
 
     try:
-        upstream_url, downstream_source, is_local = _resolve_wheels(
+        up, down = _resolve_wheels(
             downstream,
             backend,
             downstream_index=downstream_index,
             upstream_index=upstream_index,
         )
 
-        # Open upstream and compare
-        with SyncRemoteZip(backend.wheel_reader(upstream_url)) as upstream_zip:
-            if is_local:
-                result = compare_local_wheel(upstream_zip, pathlib.Path(downstream_source))
-            else:
-                with SyncRemoteZip(backend.wheel_reader(downstream_source)) as downstream_zip:
-                    result = compare_wheels(upstream_zip, downstream_zip)
-            if policy is not None:
-                effective = lookup_policy(policy, result.dist, str(result.upstream_version))
-                if effective is not None:
-                    result = apply_policy(result, effective)
-            return result
+        # Load both wheels, then compare.  Local wheels flow through the same
+        # SyncRemoteZip loader as remote ones via a FileReader.
+        with (
+            SyncRemoteZip(backend.wheel_reader(up.source)) as upstream_zip,
+            SyncRemoteZip(_sync_reader(backend, down.source, down.is_local)) as downstream_zip,
+        ):
+            upstream_info = WheelInfo.from_sync_remote(upstream_zip, origin=up.origin)
+            downstream_info = WheelInfo.from_sync_remote(downstream_zip, origin=down.origin)
+        context = Context.default(policy=policy)
+        return compare(context, upstream_info, downstream_info)
     except RetreadError:
         raise
     except Exception as exc:
@@ -192,8 +235,8 @@ async def async_retread(
     downstream_index: str | None = None,
     upstream_index: str = PYPI_SIMPLE_ENDPOINT,
     backend: AsyncBackend | None = None,
-    policy: dict | None = None,
-) -> WheelComparison:
+    policy: dict[str, PackagePolicy] | None = None,
+) -> Comparison:
     """Async version of :func:`sync_retread`.
 
     Args:
@@ -204,7 +247,7 @@ async def async_retread(
             :class:`~retread.backends.AiohttpBackend` is created.
 
     Returns:
-        A :class:`WheelComparison` result.
+        A :class:`~retread.Comparison` result.
     """
     # See comment in sync_retread for why RemoteZip, not RemoteWheel.
     from zipwire import AsyncRemoteZip
@@ -216,29 +259,23 @@ async def async_retread(
         backend = AiohttpBackend()
 
     try:
-        upstream_url, downstream_source, is_local = await _async_resolve_wheels(
+        up, down = await _async_resolve_wheels(
             downstream,
             backend,
             downstream_index=downstream_index,
             upstream_index=upstream_index,
         )
 
-        # Open upstream and compare
-        async with AsyncRemoteZip(backend.wheel_reader(upstream_url)) as upstream_zip:
-            if is_local:
-                result = await async_compare_local_wheel(
-                    upstream_zip, pathlib.Path(downstream_source)
-                )
-            else:
-                async with AsyncRemoteZip(
-                    backend.wheel_reader(downstream_source)
-                ) as downstream_zip:
-                    result = await async_compare_wheels(upstream_zip, downstream_zip)
-            if policy is not None:
-                effective = lookup_policy(policy, result.dist, str(result.upstream_version))
-                if effective is not None:
-                    result = apply_policy(result, effective)
-            return result
+        # Load both wheels, then compare.  Local wheels flow through the same
+        # AsyncRemoteZip loader as remote ones via an AsyncFileReader.
+        async with (
+            AsyncRemoteZip(backend.wheel_reader(up.source)) as upstream_zip,
+            AsyncRemoteZip(_async_reader(backend, down.source, down.is_local)) as downstream_zip,
+        ):
+            upstream_info = await WheelInfo.from_async_remote(upstream_zip, origin=up.origin)
+            downstream_info = await WheelInfo.from_async_remote(downstream_zip, origin=down.origin)
+        context = Context.default(policy=policy)
+        return compare(context, upstream_info, downstream_info)
     except RetreadError:
         raise
     except Exception as exc:
@@ -279,40 +316,25 @@ def sync_diff(
         backend = RequestsBackend()
 
     try:
-        upstream_url, downstream_source, is_local = _resolve_wheels(
+        up, down = _resolve_wheels(
             downstream,
             backend,
             downstream_index=downstream_index,
             upstream_index=upstream_index,
         )
 
-        with SyncRemoteZip(backend.wheel_reader(upstream_url)) as upstream_zip:
+        with (
+            SyncRemoteZip(backend.wheel_reader(up.source)) as upstream_zip,
+            SyncRemoteZip(_sync_reader(backend, down.source, down.is_local)) as downstream_zip,
+        ):
             upstream_names = {info.filename for info in upstream_zip.infolist()}
-
-            if is_local:
-                with zipfile.ZipFile(downstream_source) as downstream_zip:
-                    downstream_names = {
-                        info.filename for info in downstream_zip.infolist() if not info.is_dir()
-                    }
-                    result: list[tuple[str, bytes | None, bytes | None]] = []
-                    for fname in files:
-                        up_bytes = upstream_zip.read(fname) if fname in upstream_names else None
-                        down_bytes = (
-                            downstream_zip.read(fname) if fname in downstream_names else None
-                        )
-                        result.append((fname, up_bytes, down_bytes))
-                    return result
-            else:
-                with SyncRemoteZip(backend.wheel_reader(downstream_source)) as downstream_zip:
-                    downstream_names = {info.filename for info in downstream_zip.infolist()}
-                    result = []
-                    for fname in files:
-                        up_bytes = upstream_zip.read(fname) if fname in upstream_names else None
-                        down_bytes = (
-                            downstream_zip.read(fname) if fname in downstream_names else None
-                        )
-                        result.append((fname, up_bytes, down_bytes))
-                    return result
+            downstream_names = {info.filename for info in downstream_zip.infolist()}
+            result: list[tuple[str, bytes | None, bytes | None]] = []
+            for fname in files:
+                up_bytes = upstream_zip.read(fname) if fname in upstream_names else None
+                down_bytes = downstream_zip.read(fname) if fname in downstream_names else None
+                result.append((fname, up_bytes, down_bytes))
+            return result
     except RetreadError:
         raise
     except Exception as exc:
@@ -340,48 +362,27 @@ async def async_diff(
         backend = AiohttpBackend()
 
     try:
-        upstream_url, downstream_source, is_local = await _async_resolve_wheels(
+        up, down = await _async_resolve_wheels(
             downstream,
             backend,
             downstream_index=downstream_index,
             upstream_index=upstream_index,
         )
 
-        async with AsyncRemoteZip(backend.wheel_reader(upstream_url)) as upstream_zip:
+        async with (
+            AsyncRemoteZip(backend.wheel_reader(up.source)) as upstream_zip,
+            AsyncRemoteZip(_async_reader(backend, down.source, down.is_local)) as downstream_zip,
+        ):
             upstream_names = {info.filename for info in upstream_zip.infolist()}
-
-            if is_local:
-                with zipfile.ZipFile(downstream_source) as downstream_zip:
-                    downstream_names = {
-                        info.filename for info in downstream_zip.infolist() if not info.is_dir()
-                    }
-                    result: list[tuple[str, bytes | None, bytes | None]] = []
-                    for fname in files:
-                        up_bytes = (
-                            (await upstream_zip.read(fname)) if fname in upstream_names else None
-                        )
-                        down_bytes = (
-                            downstream_zip.read(fname) if fname in downstream_names else None
-                        )
-                        result.append((fname, up_bytes, down_bytes))
-                    return result
-            else:
-                async with AsyncRemoteZip(
-                    backend.wheel_reader(downstream_source)
-                ) as downstream_zip:
-                    downstream_names = {info.filename for info in downstream_zip.infolist()}
-                    result = []
-                    for fname in files:
-                        up_bytes = (
-                            (await upstream_zip.read(fname)) if fname in upstream_names else None
-                        )
-                        down_bytes = (
-                            (await downstream_zip.read(fname))
-                            if fname in downstream_names
-                            else None
-                        )
-                        result.append((fname, up_bytes, down_bytes))
-                    return result
+            downstream_names = {info.filename for info in downstream_zip.infolist()}
+            result: list[tuple[str, bytes | None, bytes | None]] = []
+            for fname in files:
+                up_bytes = (await upstream_zip.read(fname)) if fname in upstream_names else None
+                down_bytes = (
+                    (await downstream_zip.read(fname)) if fname in downstream_names else None
+                )
+                result.append((fname, up_bytes, down_bytes))
+            return result
     except RetreadError:
         raise
     except Exception as exc:
