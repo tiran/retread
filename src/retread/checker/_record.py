@@ -1,30 +1,24 @@
-"""RECORD validation for wheel files.
+"""RECORD validation checker.
 
-Cross-validates the ``RECORD`` CSV manifest inside a wheel against
-the ZIP central directory to detect missing files, extra files, and
-size mismatches.
+Cross-validates each wheel's ``RECORD`` CSV manifest against its ZIP central
+directory to detect missing files, extra files, and size mismatches.
 """
 
 from __future__ import annotations
 
 import csv
-import dataclasses
 import logging
 import typing
-from typing import Any
+
+from retread._enums import Side
+from retread._findings import RecordMismatch
 
 if typing.TYPE_CHECKING:
-    from retread._compare import WheelComparison
+    from retread._findings import Comparison
+    from retread._wheel import WheelInfo
+    from retread.checker._engine import Pool
 
 logger = logging.getLogger(__name__)
-
-
-@dataclasses.dataclass(frozen=True, slots=True)
-class RecordMismatch:
-    """A mismatch between a wheel's RECORD and its ZIP contents."""
-
-    side: str  # "upstream" or "downstream"
-    message: str
 
 
 def _parse_record(
@@ -93,14 +87,14 @@ def _parse_record(
 
 
 def _check_record(
-    side: str,
+    side: Side,
     record_files: dict[str, int | None],
-    zip_infos: dict[str, Any],
+    zip_sizes: dict[str, int],
     record_path: str,
 ) -> list[RecordMismatch]:
     """Compare one wheel's parsed RECORD against its ZIP central directory."""
     mismatches: list[RecordMismatch] = []
-    zip_names = set(zip_infos)
+    zip_names = set(zip_sizes)
     record_names = set(record_files)
 
     # Files in ZIP but not in RECORD (excluding RECORD itself)
@@ -120,7 +114,7 @@ def _check_record(
         record_size = record_files.get(fname)
         if record_size is None:
             continue
-        zip_size = zip_infos[fname].file_size
+        zip_size = zip_sizes[fname]
         if record_size != zip_size:
             mismatches.append(
                 RecordMismatch(
@@ -132,55 +126,50 @@ def _check_record(
     return mismatches
 
 
-def check_records(
-    result: WheelComparison,
-    *,
-    upstream_infos: dict[str, Any],
-    downstream_infos: dict[str, Any],
-    upstream_record: bytes | None = None,
-    downstream_record: bytes | None = None,
-) -> WheelComparison:
-    """Cross-validate RECORD files against ZIP central directory contents.
+class RecordChecker:
+    """Cross-validate RECORD files against ZIP central directory contents."""
 
-    *upstream_record* / *downstream_record* are the raw bytes of each
-    side's ``RECORD`` file (``None`` when absent or not fetched).
-    """
-    mismatches: list[RecordMismatch] = []
+    name = "record"
+    priority = 210
 
-    upstream_record_path = f"{result.upstream_dist}-{result.upstream_version}.dist-info/RECORD"
-    downstream_record_path = (
-        f"{result.downstream_dist}-{result.downstream_version}.dist-info/RECORD"
-    )
+    def check(self, comparison: Comparison, pool: Pool) -> None:
+        mismatches: list[RecordMismatch] = []
+        for side, wheel in (
+            (Side.UPSTREAM, comparison.upstream),
+            (Side.DOWNSTREAM, comparison.downstream),
+        ):
+            mismatches.extend(self._check_side(side, wheel))
+        if mismatches:
+            comparison.analysis.record_mismatches.extend(mismatches)
 
-    for side, infos, record_bytes, record_path in [
-        ("upstream", upstream_infos, upstream_record, upstream_record_path),
-        ("downstream", downstream_infos, downstream_record, downstream_record_path),
-    ]:
+    @staticmethod
+    def _check_side(side: Side, wheel: WheelInfo) -> list[RecordMismatch]:
+        record_path = f"{wheel.dist_info}/RECORD"
+        record_bytes = wheel.di_record
         if record_bytes is None:
             msg = f"missing RECORD: {record_path}"
             logger.info("RECORD check [%s]: %s", side, msg)
-            mismatches.append(RecordMismatch(side, msg))
-            continue
+            return [RecordMismatch(side, msg)]
+
         try:
             record_files, parse_errors = _parse_record(record_bytes, record_path)
         except Exception:
             msg = f"malformed RECORD: {record_path}"
             logger.info("RECORD check [%s]: %s", side, msg)
-            mismatches.append(RecordMismatch(side, msg))
-            continue
+            return [RecordMismatch(side, msg)]
+
+        mismatches: list[RecordMismatch] = []
         for err in parse_errors:
             logger.info("RECORD check [%s]: %s", side, err)
             mismatches.append(RecordMismatch(side, err))
         if not record_files and not parse_errors:
             msg = f"empty RECORD: {record_path}"
             logger.info("RECORD check [%s]: %s", side, msg)
-            mismatches.append(RecordMismatch(side, msg))
-            continue
-        side_mismatches = _check_record(side, record_files, infos, record_path)
+            return [RecordMismatch(side, msg)]
+
+        zip_sizes = {str(path): stat.size for path, stat in wheel.files.items()}
+        side_mismatches = _check_record(side, record_files, zip_sizes, record_path)
         for m in side_mismatches:
             logger.info("RECORD check [%s]: %s", side, m.message)
         mismatches.extend(side_mismatches)
-
-    if not mismatches:
-        return result
-    return dataclasses.replace(result, record_mismatches=tuple(mismatches))
+        return mismatches

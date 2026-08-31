@@ -4,16 +4,23 @@ import zipfile
 
 import pytest
 from click.testing import CliRunner
-from packaging.version import Version
+from zipwire import SyncRemoteZip
+from zipwire.backends import FileReader
 
-from retread.__main__ import cli
-from retread._compare import (
+from retread import (
+    Analysis,
     Classification,
+    Comparison,
+    Context,
     FileDiff,
     FileEntry,
     Severity,
-    WheelComparison,
+    WheelInfo,
+    WheelSource,
+    compare,
 )
+from retread.__main__ import cli
+from retread._resolve import _wheel_basename
 
 # --- Fake objects for comparison tests ---
 
@@ -47,6 +54,122 @@ class FakeRemoteZip:
 
     def read(self, name: str) -> bytes:
         return self._files[name]
+
+
+def make_wheel_info(
+    filename: str,
+    infos: list[FakeInfo],
+    *,
+    source: str | None = None,
+    file_size: int = 0,
+    origin: WheelSource | None = None,
+    metadata: bytes | None = None,
+    wheel: bytes | None = None,
+    record: bytes | None = None,
+) -> WheelInfo:
+    """Build a :class:`~retread.WheelInfo` from fake central-directory infos.
+
+    *infos* is a list of :class:`FakeInfo` (directories excluded
+    automatically).  The dist-info blobs (METADATA/WHEEL/RECORD) are supplied
+    directly rather than looked up in *infos*.
+    """
+    basename = _wheel_basename(filename)
+    info_map = {i.filename: i for i in infos if not i.is_dir()}
+    blobs: dict[str, bytes] = {}
+    if metadata is not None:
+        blobs["METADATA"] = metadata
+    if wheel is not None:
+        blobs["WHEEL"] = wheel
+    if record is not None:
+        blobs["RECORD"] = record
+    if origin is None:
+        origin = WheelSource(source=source if source is not None else filename)
+    return WheelInfo._assemble(
+        origin=origin,
+        file_size=file_size,
+        filename=basename,
+        infos=info_map,
+        blobs=blobs,
+    )
+
+
+def make_comparison(
+    *,
+    upstream: str = "up",
+    downstream: str = "down",
+    upstream_wheel: str = "foo-1.0-py3-none-any.whl",
+    downstream_wheel: str = "foo-1.0-py3-none-any.whl",
+    only_upstream=(),
+    only_downstream=(),
+    different=(),
+    identical=(),
+    record_mismatches=(),
+    platform_warnings=(),
+    venv_bundles=(),
+    metadata_field_diffs=(),
+    context: Context | None = None,
+    **_ignored,
+) -> Comparison:
+    """Build a :class:`Comparison` from flat finding lists.
+
+    Accepts the old flat ``WheelComparison`` keyword arguments so rendering
+    and property tests can construct results without a real comparison run.
+    Legacy-only keywords (``dist``, ``upstream_version`` ...) are ignored.
+    """
+    analysis = Analysis(
+        only_upstream=list(only_upstream),
+        only_downstream=list(only_downstream),
+        different=list(different),
+        identical=list(identical),
+        record_mismatches=list(record_mismatches),
+        platform_warnings=list(platform_warnings),
+        venv_bundles=list(venv_bundles),
+        metadata_field_diffs=list(metadata_field_diffs),
+    )
+    return Comparison(
+        context=context if context is not None else Context.default(),
+        upstream=make_wheel_info(upstream_wheel, [], source=upstream),
+        downstream=make_wheel_info(downstream_wheel, [], source=downstream),
+        analysis=analysis,
+    )
+
+
+def run_compare(
+    *,
+    upstream: str = "https://pypi.org/foo-1.0-py3-none-any.whl",
+    downstream: str = "https://rebuild.test/foo-1.0-py3-none-any.whl",
+    upstream_infos: dict | None = None,
+    downstream_infos: dict | None = None,
+    upstream_metadata: bytes | None = None,
+    downstream_metadata: bytes | None = None,
+    upstream_wheel: bytes | None = None,
+    downstream_wheel: bytes | None = None,
+    upstream_record: bytes | None = None,
+    downstream_record: bytes | None = None,
+    context: Context | None = None,
+) -> Comparison:
+    """Build two :class:`WheelInfo` from fake infos and run :func:`compare`.
+
+    *upstream_infos* / *downstream_infos* map in-wheel path strings to
+    :class:`FakeInfo` (the dict values are used; keys are ignored).
+    """
+    up = make_wheel_info(
+        upstream,
+        list((upstream_infos or {}).values()),
+        source=upstream,
+        metadata=upstream_metadata,
+        wheel=upstream_wheel,
+        record=upstream_record,
+    )
+    down = make_wheel_info(
+        downstream,
+        list((downstream_infos or {}).values()),
+        source=downstream,
+        metadata=downstream_metadata,
+        wheel=downstream_wheel,
+        record=downstream_record,
+    )
+    return compare(context if context is not None else Context.default(), up, down)
 
 
 class FakePkg:
@@ -107,6 +230,12 @@ def make_wheel(path, files: dict[str, str]) -> None:
             zf.writestr(name, content)
 
 
+def load_local_wheel(path) -> WheelInfo:
+    """Load a :class:`WheelInfo` from a local wheel via a zipwire FileReader."""
+    with SyncRemoteZip(FileReader(str(path))) as zf:
+        return WheelInfo.from_sync_remote(zf)
+
+
 def make_wheel_file(root_is_purelib: bool, tags: list[str]) -> bytes:
     """Build a minimal WHEEL file as bytes."""
     purelib = "true" if root_is_purelib else "false"
@@ -126,83 +255,76 @@ UPSTREAM_URL = "https://pypi.org/foo-1.0-py3-none-any.whl"
 DOWNSTREAM_URL = "https://rebuild.test/foo-1.0-py3-none-any.whl"
 
 
-@pytest.fixture()
-def identical_result() -> WheelComparison:
-    """A WheelComparison where all files are identical."""
-    return WheelComparison(
-        upstream="up",
-        downstream="down",
-        upstream_wheel="foo-1.0-py3-none-any.whl",
-        downstream_wheel="foo-1.0-py3-none-any.whl",
-        dist="foo",
-        upstream_version=Version("1.0"),
-        downstream_version=Version("1.0"),
-        only_upstream=(),
-        only_downstream=(),
-        different=(),
-        identical=("foo/__init__.py", "foo/module.py"),
+def _fixture_comparison(analysis: Analysis) -> Comparison:
+    """Wrap an :class:`Analysis` in a :class:`Comparison` for two ``foo`` wheels."""
+    upstream = make_wheel_info("foo-1.0-py3-none-any.whl", [], source="up")
+    downstream = make_wheel_info("foo-1.0-py3-none-any.whl", [], source="down")
+    return Comparison(
+        context=Context.default(),
+        upstream=upstream,
+        downstream=downstream,
+        analysis=analysis,
     )
 
 
 @pytest.fixture()
-def error_result() -> WheelComparison:
-    """A WheelComparison with errors and notices."""
-    return WheelComparison(
-        upstream="up",
-        downstream="down",
-        upstream_wheel="foo-1.0-py3-none-any.whl",
-        downstream_wheel="foo-1.0-py3-none-any.whl",
-        dist="foo",
-        upstream_version=Version("1.0"),
-        downstream_version=Version("1.0"),
-        only_upstream=(FileEntry("missing.py", Severity.ERROR, Classification.OTHER),),
-        only_downstream=(
-            FileEntry(
-                "foo-1.0.dist-info/extra.txt",
-                Severity.NOTICE,
-                Classification.DIST_INFO,
-            ),
-        ),
-        different=(
-            FileDiff(
-                "foo-1.0.dist-info/RECORD",
-                500,
-                600,
-                111,
-                222,
-                Severity.EXPECTED,
-                Classification.RECORD,
-            ),
-        ),
-        identical=("foo/__init__.py",),
+def identical_result() -> Comparison:
+    """A Comparison where all files are identical."""
+    return _fixture_comparison(
+        Analysis(identical=["foo/__init__.py", "foo/module.py"]),
     )
 
 
 @pytest.fixture()
-def notice_only_result() -> WheelComparison:
-    """A WheelComparison with only notices (no errors)."""
-    return WheelComparison(
-        upstream="up",
-        downstream="down",
-        upstream_wheel="foo-1.0-py3-none-any.whl",
-        downstream_wheel="foo-1.0-py3-none-any.whl",
-        dist="foo",
-        upstream_version=Version("1.0"),
-        downstream_version=Version("1.0"),
-        only_upstream=(FileEntry("foo.libs/bar.so", Severity.NOTICE, Classification.AUDITWHEEL),),
-        only_downstream=(),
-        different=(
-            FileDiff(
-                "foo.so",
-                1000,
-                2000,
-                111,
-                222,
-                Severity.EXPECTED,
-                Classification.EXTENSION_MODULE,
-            ),
-        ),
-        identical=("foo/__init__.py",),
+def error_result() -> Comparison:
+    """A Comparison with errors and notices."""
+    return _fixture_comparison(
+        Analysis(
+            only_upstream=[FileEntry("missing.py", Severity.ERROR, Classification.OTHER)],
+            only_downstream=[
+                FileEntry(
+                    "foo-1.0.dist-info/extra.txt",
+                    Severity.NOTICE,
+                    Classification.DIST_INFO,
+                )
+            ],
+            different=[
+                FileDiff(
+                    "foo-1.0.dist-info/RECORD",
+                    500,
+                    600,
+                    111,
+                    222,
+                    Severity.EXPECTED,
+                    Classification.RECORD,
+                )
+            ],
+            identical=["foo/__init__.py"],
+        )
+    )
+
+
+@pytest.fixture()
+def notice_only_result() -> Comparison:
+    """A Comparison with only notices (no errors)."""
+    return _fixture_comparison(
+        Analysis(
+            only_upstream=[
+                FileEntry("foo.libs/bar.so", Severity.NOTICE, Classification.AUDITWHEEL)
+            ],
+            different=[
+                FileDiff(
+                    "foo.so",
+                    1000,
+                    2000,
+                    111,
+                    222,
+                    Severity.EXPECTED,
+                    Classification.EXTENSION_MODULE,
+                )
+            ],
+            identical=["foo/__init__.py"],
+        )
     )
 
 

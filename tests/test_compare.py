@@ -1,44 +1,55 @@
-"""Tests for retread._compare."""
+"""Tests for the comparison engine and its helpers."""
 
 import json
 import zipfile
 
 import pytest
-from packaging.version import Version
+from packaging.metadata import parse_email
 
-from retread._compare import (
+from retread import (
     Classification,
+    Comparison,
+    Context,
     FileDiff,
     FileEntry,
     MetadataFieldDiff,
     Severity,
     VenvBundle,
-    WheelComparison,
-    _check_metadata,
-    _classify_file,
-    _compare,
-    _extension_stem,
-    _find_dist_info_name,
-    _is_auditwheel_lib,
-    _is_shared_library,
-    _local_zip_infos,
-    _metadata_core_match,
-    _metadata_field_diffs,
-    compare_local_wheel,
-    compare_wheels,
+    compare,
 )
 from retread._errors import InvalidWheelError
 from retread._resolve import _is_url, _parse_name_version, _wheel_basename
+from retread._wheel import _find_dist_info_name
+from retread.checker._classify import (
+    AuditwheelChecker,
+    ExtensionPairingChecker,
+    SharedLibraryChecker,
+    classify_label,
+)
+from retread.checker._metadata import _core_match, _field_diffs
 
 from .conftest import (
     DOWNSTREAM_URL,
     UPSTREAM_URL,
     FakeInfo,
-    FakeRemoteZip,
+    load_local_wheel,
+    make_comparison,
     make_metadata,
     make_record,
     make_wheel,
+    make_wheel_info,
+    run_compare,
 )
+
+is_shared_library = SharedLibraryChecker.matches
+is_auditwheel_lib = AuditwheelChecker.matches
+extension_stem = ExtensionPairingChecker.extension_stem
+
+
+def _parse_md(data: bytes):
+    """Parse METADATA bytes into a RawMetadata mapping."""
+    return parse_email(data)[0]
+
 
 # --- boolean helpers ---
 
@@ -57,21 +68,26 @@ from .conftest import (
     ],
 )
 def test_is_shared_library(filename: str, expected: bool) -> None:
-    assert _is_shared_library(filename) == expected
+    assert is_shared_library(filename) == expected
 
 
 @pytest.mark.parametrize(
     ("filename", "expected"),
     [
+        ("torchvision.libs/libcudart.faf08d9a.so.13", True),
         ("Pillow.libs/libpng16.so.16", True),
-        ("foo.libs/bar.so", True),
-        ("foo/bar.libs/baz.so", True),
+        ("foo.libs/libbar.so.1", True),
+        # Not a lib*.so* name.
+        ("foo.libs/bar.so", False),
+        ("foo.libs/libbar.txt", False),
+        # A .libs directory nested under a subdirectory, not the wheel root.
+        ("foo/bar.libs/libbaz.so", False),
         ("foo/bar.so", False),
-        ("foo.lib/bar.so", False),
+        ("foo.lib/libbar.so", False),
     ],
 )
 def test_is_auditwheel_lib(filename: str, expected: bool) -> None:
-    assert _is_auditwheel_lib(filename) == expected
+    assert is_auditwheel_lib(filename) == expected
 
 
 @pytest.mark.parametrize(
@@ -131,7 +147,7 @@ def test_parse_name_version_invalid() -> None:
         _parse_name_version("not-a-wheel.tar.gz")
 
 
-# --- _classify_file ---
+# --- classify_label ---
 
 _DIST = "foo"
 _VER = "1.0"
@@ -181,6 +197,8 @@ ERROR = Severity.ERROR
         # static archives (lib*.a)
         ("numpy/.dylibs/libopenblas.a", False, EXPECTED, Classification.STATIC_LIBRARY),
         ("numpy/.dylibs/libopenblas.a", True, ERROR, Classification.STATIC_LIBRARY),
+        # a root-level static archive is still recognized
+        ("libopenblas.a", False, EXPECTED, Classification.STATIC_LIBRARY),
         # Java archives (.jar)
         ("org.jpype.jar", False, EXPECTED, Classification.JAR),
         ("org.jpype.jar", True, ERROR, Classification.JAR),
@@ -220,6 +238,8 @@ ERROR = Severity.ERROR
         ("foo/grammar/gen/FooParser.py", True, NOTICE, Classification.GENERATED_ANTLR),
         ("foo/grammar/gen/FooParserListener.py", False, NOTICE, Classification.GENERATED_ANTLR),
         ("foo/grammar/gen/FooParserVisitor.py", False, NOTICE, Classification.GENERATED_ANTLR),
+        # a directory merely ending in "grammar" is not an ANTLR gen dir
+        ("foo/mygrammar/gen/FooLexer.py", False, ERROR, Classification.OTHER),
         # C/C++ source and header files (always NOTICE)
         ("foo/bar.c", False, NOTICE, Classification.GENERATED_C),
         ("foo/bar.c", True, NOTICE, Classification.GENERATED_C),
@@ -254,6 +274,7 @@ ERROR = Severity.ERROR
         "ext-module-missing",
         "static-lib-diff",
         "static-lib-missing",
+        "static-lib-root",
         "jar-diff",
         "jar-missing",
         "version-file-diff",
@@ -277,6 +298,7 @@ ERROR = Severity.ERROR
         "generated-antlr-parser",
         "generated-antlr-listener",
         "generated-antlr-visitor",
+        "generated-antlr-false-positive",
         "generated-c-diff",
         "generated-c-missing",
         "generated-cpp",
@@ -296,7 +318,7 @@ def test_classify_file(
     expected_severity: Severity,
     expected_classification: Classification,
 ) -> None:
-    severity, classification = _classify_file(filename, dist=_DIST, version=_VER, missing=missing)
+    severity, classification = classify_label(filename, dist=_DIST, version=_VER, missing=missing)
     assert severity is expected_severity
     assert classification is expected_classification
 
@@ -355,11 +377,11 @@ def test_find_dist_info_name_ignores_different_package() -> None:
     assert _find_dist_info_name(infos, "foo", "1.0") == "foo"
 
 
-# --- _find_dist_info_name integration with _compare ---
+# --- dist-info resolution integration with compare() ---
 
 
 def test_compare_resolves_dist_info_case_mismatch() -> None:
-    """_compare() resolves dist-info name when casing differs from filename."""
+    """compare() resolves dist-info name when casing differs from filename."""
     up_url = "https://pypi.org/InquirerPy-0.3.4-py3-none-any.whl"
     down_url = "https://rebuild.test/InquirerPy-0.3.4-1-py3-none-any.whl"
     up_infos = {
@@ -380,27 +402,28 @@ def test_compare_resolves_dist_info_case_mismatch() -> None:
             "inquirerpy-0.3.4.dist-info/METADATA", crc=444, file_size=100
         ),
     }
-    result = _compare(
+    result = run_compare(
         upstream=up_url,
         downstream=down_url,
         upstream_infos=up_infos,
         downstream_infos=down_infos,
     )
-    assert result.upstream_dist == "inquirerpy"
-    assert result.downstream_dist == "inquirerpy"
+    analysis = result.analysis
+    assert result.upstream.dist == "inquirerpy"
+    assert result.downstream.dist == "inquirerpy"
     # RECORD should be EXPECTED, not ERROR
-    record_diffs = [d for d in result.different if d.filename.endswith("/RECORD")]
+    record_diffs = [d for d in analysis.different if d.filename.endswith("/RECORD")]
     assert len(record_diffs) == 1
     assert record_diffs[0].severity is Severity.EXPECTED
     assert record_diffs[0].classification is Classification.RECORD
     # METADATA should be NOTICE, not ERROR
-    meta_diffs = [d for d in result.different if d.filename.endswith("/METADATA")]
+    meta_diffs = [d for d in analysis.different if d.filename.endswith("/METADATA")]
     assert len(meta_diffs) == 1
     assert meta_diffs[0].severity is Severity.NOTICE
     assert meta_diffs[0].classification is Classification.METADATA
 
 
-# --- _metadata_core_match ---
+# --- _core_match ---
 
 
 @pytest.mark.parametrize(
@@ -503,17 +526,17 @@ def test_compare_resolves_dist_info_case_mismatch() -> None:
 def test_metadata_core_match(up_args: tuple, down_args: tuple, expected: bool) -> None:
     up = make_metadata(*up_args)
     down = make_metadata(*down_args)
-    assert _metadata_core_match(up, down) is expected
+    assert _core_match(_parse_md(up), _parse_md(down)) is expected
 
 
 def test_metadata_core_match_extra_fields_ignored() -> None:
     """Non-core fields (like Description) should not affect the match."""
     up = make_metadata("foo", "1.0")
     down = up + b"\nDescription: something different\n"
-    assert _metadata_core_match(up, down) is True
+    assert _core_match(_parse_md(up), _parse_md(down)) is True
 
 
-# --- _metadata_field_diffs ---
+# --- _field_diffs ---
 
 
 @pytest.mark.parametrize(
@@ -523,46 +546,46 @@ def test_metadata_core_match_extra_fields_ignored() -> None:
         (
             (["a>=1", "b >= 2"], ["docs", "testing"]),
             (["b>=2", "a>=1"], ["testing", "docs"]),
-            (),
+            [],
         ),
         # only Requires-Dist differs (shared entry is dropped)
         (
             (["bar>=1.0", "shared==2.0"], []),
             (["baz<3", "shared==2.0"], []),
-            (MetadataFieldDiff("Requires-Dist", ("bar>=1",), ("baz<3",)),),
+            [MetadataFieldDiff("Requires-Dist", ("bar>=1",), ("baz<3",))],
         ),
         # only Provides-Extra differs
         (
             ([], ["docs", "shared"]),
             ([], ["shared", "extra-tools"]),
-            (MetadataFieldDiff("Provides-Extra", ("docs",), ("extra-tools",)),),
+            [MetadataFieldDiff("Provides-Extra", ("docs",), ("extra-tools",))],
         ),
         # both fields differ (Requires-Dist reported before Provides-Extra)
         (
             (["bar>=1.0"], ["docs"]),
             (["baz<3"], ["testing"]),
-            (
+            [
                 MetadataFieldDiff("Requires-Dist", ("bar>=1",), ("baz<3",)),
                 MetadataFieldDiff("Provides-Extra", ("docs",), ("testing",)),
-            ),
+            ],
         ),
         # hyphen/underscore dep-name spellings compare equal (PEP 503)
         (
             (["typing-extensions>=3.7"], []),
             (["typing_extensions>=3.7"], []),
-            (),
+            [],
         ),
         # trailing-zero version specifiers compare equal (<5 == <5.0)
         (
             (["typing-extensions<5,>=4.1"], []),
             (["typing-extensions<5.0,>=4.1"], []),
-            (),
+            [],
         ),
         # extra-name spellings compare equal (PEP 685)
         (
             ([], ["code_syntax_highlighting"]),
             ([], ["code-syntax-highlighting"]),
-            (),
+            [],
         ),
     ],
     ids=[
@@ -575,32 +598,33 @@ def test_metadata_core_match_extra_fields_ignored() -> None:
         "normalized-extra-name",
     ],
 )
-def test_metadata_field_diffs(up: tuple, down: tuple, expected: tuple) -> None:
+def test_metadata_field_diffs(up: tuple, down: tuple, expected: list) -> None:
     up_bytes = make_metadata("foo", "1.0", up[0], up[1])
     down_bytes = make_metadata("foo", "1.0", down[0], down[1])
-    assert _metadata_field_diffs(up_bytes, down_bytes) == expected
+    assert _field_diffs(_parse_md(up_bytes), _parse_md(down_bytes)) == expected
 
 
-# --- _compare ---
+# --- compare() engine ---
 
 
 def test_compare_identical() -> None:
     infos = {"foo/__init__.py": FakeInfo("foo/__init__.py", crc=123, file_size=50)}
-    result = _compare(
+    result = run_compare(
         upstream=UPSTREAM_URL,
         downstream=DOWNSTREAM_URL,
         upstream_infos=infos,
         downstream_infos=infos,
     )
+    analysis = result.analysis
     assert result.is_identical
-    assert len(result.identical) == 1
-    assert not result.only_upstream
-    assert not result.only_downstream
-    assert not result.different
+    assert len(analysis.identical) == 1
+    assert not analysis.only_upstream
+    assert not analysis.only_downstream
+    assert not analysis.different
 
 
 def test_compare_dist_name_normalization() -> None:
-    """upstream_dist is resolved from the actual dist-info directory."""
+    """The dist name is resolved from the actual dist-info directory."""
     up_url = "https://pypi.org/InquirerPy-0.3.4-py3-none-any.whl"
     down_url = "https://rebuild.test/inquirerpy-0.3.4-1-py3-none-any.whl"
     up_infos = {
@@ -615,16 +639,15 @@ def test_compare_dist_name_normalization() -> None:
             "inquirerpy-0.3.4.dist-info/RECORD", crc=111, file_size=200
         ),
     }
-    result = _compare(
+    result = run_compare(
         upstream=up_url,
         downstream=down_url,
         upstream_infos=up_infos,
         downstream_infos=down_infos,
     )
-    assert result.dist == "inquirerpy"
-    # upstream_dist resolved from dist-info, not from wheel filename
-    assert result.upstream_dist == "inquirerpy"
-    assert result.downstream_dist == "inquirerpy"
+    # dist resolved from dist-info, not from wheel filename
+    assert result.upstream.dist == "inquirerpy"
+    assert result.downstream.dist == "inquirerpy"
     assert result.is_identical
 
 
@@ -645,62 +668,66 @@ def test_compare_dist_name_normalization_classifies_downstream() -> None:
             "inquirerpy-0.3.4.dist-info/RECORD", crc=222, file_size=200
         ),
     }
-    result = _compare(
+    result = run_compare(
         upstream=up_url,
         downstream=down_url,
         upstream_infos=up_infos,
         downstream_infos=down_infos,
     )
+    analysis = result.analysis
     # dist-info RECORD files should be classified as EXPECTED, not ERROR
-    assert len(result.only_upstream) == 1
-    assert result.only_upstream[0].classification is Classification.RECORD
-    assert result.only_upstream[0].severity is Severity.EXPECTED
-    assert len(result.only_downstream) == 1
-    assert result.only_downstream[0].classification is Classification.RECORD
-    assert result.only_downstream[0].severity is Severity.EXPECTED
+    assert len(analysis.only_upstream) == 1
+    assert analysis.only_upstream[0].classification is Classification.RECORD
+    assert analysis.only_upstream[0].severity is Severity.EXPECTED
+    assert len(analysis.only_downstream) == 1
+    assert analysis.only_downstream[0].classification is Classification.RECORD
+    assert analysis.only_downstream[0].severity is Severity.EXPECTED
 
 
 def test_compare_different_crc() -> None:
     up = {"foo/__init__.py": FakeInfo("foo/__init__.py", crc=123, file_size=50)}
     down = {"foo/__init__.py": FakeInfo("foo/__init__.py", crc=456, file_size=50)}
-    result = _compare(
+    result = run_compare(
         upstream=UPSTREAM_URL,
         downstream=DOWNSTREAM_URL,
         upstream_infos=up,
         downstream_infos=down,
     )
+    analysis = result.analysis
     assert not result.is_identical
-    assert len(result.different) == 1
-    assert result.different[0].filename == "foo/__init__.py"
-    assert result.different[0].severity is Severity.ERROR
+    assert len(analysis.different) == 1
+    assert analysis.different[0].filename == "foo/__init__.py"
+    assert analysis.different[0].severity is Severity.ERROR
 
 
 def test_compare_only_upstream() -> None:
     shared = FakeInfo("foo/__init__.py", crc=123, file_size=50)
     up = {"foo/__init__.py": shared, "foo/extra.py": FakeInfo("foo/extra.py", crc=789)}
     down = {"foo/__init__.py": shared}
-    result = _compare(
+    result = run_compare(
         upstream=UPSTREAM_URL,
         downstream=DOWNSTREAM_URL,
         upstream_infos=up,
         downstream_infos=down,
     )
-    assert len(result.only_upstream) == 1
-    assert result.only_upstream[0].filename == "foo/extra.py"
+    analysis = result.analysis
+    assert len(analysis.only_upstream) == 1
+    assert analysis.only_upstream[0].filename == "foo/extra.py"
 
 
 def test_compare_only_downstream() -> None:
     shared = FakeInfo("foo/__init__.py", crc=123, file_size=50)
     up = {"foo/__init__.py": shared}
     down = {"foo/__init__.py": shared, "foo/new.py": FakeInfo("foo/new.py", crc=999)}
-    result = _compare(
+    result = run_compare(
         upstream=UPSTREAM_URL,
         downstream=DOWNSTREAM_URL,
         upstream_infos=up,
         downstream_infos=down,
     )
-    assert len(result.only_downstream) == 1
-    assert result.only_downstream[0].filename == "foo/new.py"
+    analysis = result.analysis
+    assert len(analysis.only_downstream) == 1
+    assert analysis.only_downstream[0].filename == "foo/new.py"
 
 
 def test_compare_dist_info_record_is_expected() -> None:
@@ -708,17 +735,18 @@ def test_compare_dist_info_record_is_expected() -> None:
     fname = "foo-1.0.dist-info/RECORD"
     up = {fname: FakeInfo(fname, crc=111, file_size=500)}
     down = {fname: FakeInfo(fname, crc=222, file_size=600)}
-    result = _compare(
+    result = run_compare(
         upstream=UPSTREAM_URL,
         downstream=DOWNSTREAM_URL,
         upstream_infos=up,
         downstream_infos=down,
     )
-    assert result.different[0].severity is Severity.EXPECTED
-    assert result.different[0].classification is Classification.RECORD
+    analysis = result.analysis
+    assert analysis.different[0].severity is Severity.EXPECTED
+    assert analysis.different[0].classification is Classification.RECORD
 
 
-# --- _extension_stem ---
+# --- extension_stem ---
 
 
 @pytest.mark.parametrize(
@@ -735,7 +763,7 @@ def test_compare_dist_info_record_is_expected() -> None:
     ids=["cpython", "abi3", "abi3t", "bare-so", "python", "c-source", "versioned-so"],
 )
 def test_extension_stem(filename: str, expected: str | None) -> None:
-    assert _extension_stem(filename) == expected
+    assert extension_stem(filename) == expected
 
 
 # --- extension module ABI pairing ---
@@ -747,20 +775,21 @@ def test_compare_pairs_abi3_with_cpython_extension() -> None:
     down_so = "foo/_bar.cpython-312-x86_64-linux-gnu.so"
     up = {up_so: FakeInfo(up_so, crc=111, file_size=1000)}
     down = {down_so: FakeInfo(down_so, crc=222, file_size=2000)}
-    result = _compare(
+    result = run_compare(
         upstream=UPSTREAM_URL,
         downstream=DOWNSTREAM_URL,
         upstream_infos=up,
         downstream_infos=down,
     )
-    assert len(result.only_upstream) == 1
-    assert result.only_upstream[0].filename == up_so
-    assert result.only_upstream[0].severity is Severity.NOTICE
-    assert result.only_upstream[0].classification is Classification.EXTENSION_MODULE
-    assert len(result.only_downstream) == 1
-    assert result.only_downstream[0].filename == down_so
-    assert result.only_downstream[0].severity is Severity.NOTICE
-    assert result.only_downstream[0].classification is Classification.EXTENSION_MODULE
+    analysis = result.analysis
+    assert len(analysis.only_upstream) == 1
+    assert analysis.only_upstream[0].filename == up_so
+    assert analysis.only_upstream[0].severity is Severity.NOTICE
+    assert analysis.only_upstream[0].classification is Classification.EXTENSION_MODULE
+    assert len(analysis.only_downstream) == 1
+    assert analysis.only_downstream[0].filename == down_so
+    assert analysis.only_downstream[0].severity is Severity.NOTICE
+    assert analysis.only_downstream[0].classification is Classification.EXTENSION_MODULE
 
 
 def test_compare_unpaired_extension_stays_error() -> None:
@@ -768,35 +797,36 @@ def test_compare_unpaired_extension_stays_error() -> None:
     up_so = "foo/_extra.cpython-312-x86_64-linux-gnu.so"
     up = {up_so: FakeInfo(up_so, crc=111, file_size=1000)}
     down: dict[str, FakeInfo] = {}
-    result = _compare(
+    result = run_compare(
         upstream=UPSTREAM_URL,
         downstream=DOWNSTREAM_URL,
         upstream_infos=up,
         downstream_infos=down,
     )
-    assert len(result.only_upstream) == 1
-    assert result.only_upstream[0].severity is Severity.ERROR
+    analysis = result.analysis
+    assert len(analysis.only_upstream) == 1
+    assert analysis.only_upstream[0].severity is Severity.ERROR
 
 
-# --- WheelComparison properties ---
+# --- Comparison properties ---
 
 
-def test_wheel_comparison_is_identical(identical_result: WheelComparison) -> None:
+def test_wheel_comparison_is_identical(identical_result: Comparison) -> None:
     assert identical_result.is_identical
     assert not identical_result.has_errors
 
 
-def test_wheel_comparison_has_errors(error_result: WheelComparison) -> None:
+def test_wheel_comparison_has_errors(error_result: Comparison) -> None:
     assert error_result.has_errors
     assert not error_result.is_identical
 
 
-def test_wheel_comparison_notice_only(notice_only_result: WheelComparison) -> None:
+def test_wheel_comparison_notice_only(notice_only_result: Comparison) -> None:
     assert not notice_only_result.has_errors
     assert not notice_only_result.is_identical
 
 
-# --- _local_zip_infos ---
+# --- loading a local wheel through a FileReader ---
 
 
 def test_local_zip_infos(tmp_path) -> None:
@@ -805,133 +835,95 @@ def test_local_zip_infos(tmp_path) -> None:
         zf.writestr("test/__init__.py", "# init")
         zf.writestr("test/module.py", "x = 1")
         zf.mkdir("test/subdir/")
-    infos = _local_zip_infos(whl_path)
-    assert "test/__init__.py" in infos
-    assert "test/module.py" in infos
-    assert not any(name.endswith("/") for name in infos)
+    names = load_local_wheel(whl_path).names
+    assert "test/__init__.py" in names
+    assert "test/module.py" in names
+    assert not any(name.endswith("/") for name in names)
 
 
-# --- _check_metadata ---
+# --- MetadataChecker via compare() ---
 
 
-@pytest.fixture()
-def _metadata_diff_result():
-    """A WheelComparison with a single METADATA diff at NOTICE severity."""
-    diff = FileDiff(
-        filename="foo-1.0.dist-info/METADATA",
-        upstream_size=100,
-        downstream_size=200,
-        upstream_crc32=111,
-        downstream_crc32=222,
-        severity=Severity.NOTICE,
-        classification=Classification.METADATA,
-    )
-    return WheelComparison(
-        upstream="up",
-        downstream="down",
-        upstream_wheel="foo-1.0-py3-none-any.whl",
-        downstream_wheel="foo-1.0-py3-none-any.whl",
-        dist="foo",
-        upstream_version=Version("1.0"),
-        downstream_version=Version("1.0"),
-        only_upstream=(),
-        only_downstream=(),
-        different=(diff,),
-        identical=(),
+def _compare_metadata(up_meta: bytes, down_meta: bytes, *, same_crc: bool = False) -> Comparison:
+    """Compare two foo-1.0 wheels differing only in their METADATA blob."""
+    down_crc = 111 if same_crc else 222
+    up = {
+        "foo-1.0.dist-info/METADATA": FakeInfo(
+            "foo-1.0.dist-info/METADATA", crc=111, file_size=len(up_meta)
+        )
+    }
+    down = {
+        "foo-1.0.dist-info/METADATA": FakeInfo(
+            "foo-1.0.dist-info/METADATA", crc=down_crc, file_size=len(down_meta)
+        )
+    }
+    return run_compare(
+        upstream_infos=up,
+        downstream_infos=down,
+        upstream_metadata=up_meta,
+        downstream_metadata=down_meta,
     )
 
 
-def test_check_metadata_upgrades_severity(_metadata_diff_result) -> None:
-    up = make_metadata("foo", "1.0", ["bar>=1.0"])
-    down = make_metadata("foo", "1.0", ["bar>=2.0"])
-    result = _check_metadata(
-        _metadata_diff_result,
-        {"foo-1.0.dist-info/METADATA": up}.__getitem__,
-        {"foo-1.0.dist-info/METADATA": down}.__getitem__,
+def test_check_metadata_upgrades_severity() -> None:
+    result = _compare_metadata(
+        make_metadata("foo", "1.0", ["bar>=1.0"]),
+        make_metadata("foo", "1.0", ["bar>=2.0"]),
     )
-    assert result.different[0].severity is Severity.ERROR
-    assert result.different[0].classification is Classification.METADATA
+    assert result.analysis.different[0].severity is Severity.ERROR
+    assert result.analysis.different[0].classification is Classification.METADATA
 
 
-def test_check_metadata_records_field_diffs(_metadata_diff_result) -> None:
-    up = make_metadata("foo", "1.0", ["bar>=1.0"])
-    down = make_metadata("foo", "1.0", ["bar>=2.0"])
-    result = _check_metadata(
-        _metadata_diff_result,
-        {"foo-1.0.dist-info/METADATA": up}.__getitem__,
-        {"foo-1.0.dist-info/METADATA": down}.__getitem__,
+def test_check_metadata_records_field_diffs() -> None:
+    result = _compare_metadata(
+        make_metadata("foo", "1.0", ["bar>=1.0"]),
+        make_metadata("foo", "1.0", ["bar>=2.0"]),
     )
-    assert result.metadata_field_diffs == (
+    assert result.analysis.metadata_field_diffs == [
         MetadataFieldDiff("Requires-Dist", ("bar>=1",), ("bar>=2",)),
-    )
+    ]
 
 
-def test_check_metadata_keeps_notice(_metadata_diff_result) -> None:
+def test_check_metadata_keeps_notice() -> None:
     up = make_metadata("foo", "1.0")
     down = up + b"\nDescription: different\n"
-    result = _check_metadata(
-        _metadata_diff_result,
-        {"foo-1.0.dist-info/METADATA": up}.__getitem__,
-        {"foo-1.0.dist-info/METADATA": down}.__getitem__,
-    )
-    assert result.different[0].severity is Severity.NOTICE
+    result = _compare_metadata(up, down)
+    assert result.analysis.different[0].severity is Severity.NOTICE
 
 
 def test_check_metadata_no_metadata_diffs() -> None:
-    diff = FileDiff(
-        "foo-1.0.dist-info/RECORD",
-        100,
-        200,
-        111,
-        222,
-        Severity.EXPECTED,
-        Classification.RECORD,
-    )
-    result = WheelComparison(
-        upstream="up",
-        downstream="down",
-        upstream_wheel="foo-1.0-py3-none-any.whl",
-        downstream_wheel="foo-1.0-py3-none-any.whl",
-        dist="foo",
-        upstream_version=Version("1.0"),
-        downstream_version=Version("1.0"),
-        only_upstream=(),
-        only_downstream=(),
-        different=(diff,),
-        identical=(),
-    )
-    assert _check_metadata(result, {}.get, {}.get) is result
+    meta = make_metadata("foo", "1.0")
+    result = _compare_metadata(meta, meta, same_crc=True)
+    assert result.analysis.metadata_field_diffs == []
+    assert not any(d.filename.endswith("/METADATA") for d in result.analysis.different)
 
 
-# --- compare_wheels ---
+# --- compare() with fake remote infos ---
 
 
 def test_compare_wheels_identical() -> None:
-    info = FakeInfo("foo/__init__.py", crc=123, file_size=50)
-    upstream = FakeRemoteZip(UPSTREAM_URL, [info])
-    downstream = FakeRemoteZip(DOWNSTREAM_URL, [info])
-    assert compare_wheels(upstream, downstream).is_identical
+    infos = {"foo/__init__.py": FakeInfo("foo/__init__.py", crc=123, file_size=50)}
+    result = run_compare(upstream_infos=infos, downstream_infos=infos)
+    assert result.is_identical
 
 
 def test_compare_wheels_metadata_upgrade() -> None:
-    up_meta = make_metadata("foo", "1.0", ["bar>=1.0"])
-    down_meta = make_metadata("foo", "2.0")
-    upstream = FakeRemoteZip(
-        UPSTREAM_URL,
-        [FakeInfo("foo-1.0.dist-info/METADATA", crc=111, file_size=len(up_meta))],
-        {"foo-1.0.dist-info/METADATA": up_meta},
+    result = _compare_metadata(
+        make_metadata("foo", "1.0", ["bar>=1.0"]),
+        make_metadata("foo", "2.0"),
     )
-    downstream = FakeRemoteZip(
-        DOWNSTREAM_URL,
-        [FakeInfo("foo-1.0.dist-info/METADATA", crc=222, file_size=len(down_meta))],
-        {"foo-1.0.dist-info/METADATA": down_meta},
-    )
-    result = compare_wheels(upstream, downstream)
     assert result.has_errors
-    assert result.different[0].severity is Severity.ERROR
+    assert result.analysis.different[0].severity is Severity.ERROR
 
 
-# --- compare_local_wheel ---
+# --- compare() with a local downstream wheel ---
+
+
+def _compare_local(upstream_info: FakeInfo, downstream_path) -> Comparison:
+    """Compare a synthetic upstream wheel against a local downstream wheel."""
+    up = make_wheel_info("foo-1.0-py3-none-any.whl", [upstream_info], source=UPSTREAM_URL)
+    down = load_local_wheel(downstream_path)
+    return compare(Context.default(), up, down)
 
 
 def test_compare_local_wheel_identical(tmp_path) -> None:
@@ -941,77 +933,67 @@ def test_compare_local_wheel_identical(tmp_path) -> None:
     with zipfile.ZipFile(downstream_path) as zf:
         local_info = zf.getinfo("foo/__init__.py")
     info = FakeInfo("foo/__init__.py", crc=local_info.CRC, file_size=local_info.file_size)
-    upstream = FakeRemoteZip(UPSTREAM_URL, [info])
-    assert compare_local_wheel(upstream, downstream_path).is_identical
+    assert _compare_local(info, downstream_path).is_identical
 
 
 def test_compare_local_wheel_different(tmp_path) -> None:
     downstream_path = tmp_path / "foo-1.0-py3-none-any.whl"
     make_wheel(downstream_path, {"foo/__init__.py": "# downstream"})
 
-    upstream = FakeRemoteZip(UPSTREAM_URL, [FakeInfo("foo/__init__.py", crc=99999, file_size=50)])
-    result = compare_local_wheel(upstream, downstream_path)
+    info = FakeInfo("foo/__init__.py", crc=99999, file_size=50)
+    result = _compare_local(info, downstream_path)
     assert not result.is_identical
     assert result.has_errors
 
 
-# --- compare_wheels with RECORD ---
+# --- compare() with RECORD ---
 
 
 def test_compare_wheels_record_mismatches() -> None:
-    """compare_wheels populates record_mismatches on mismatch."""
+    """compare() populates record_mismatches on mismatch."""
     # RECORD lists wrong size
     record_bytes = make_record({"foo/__init__.py": 999})
-    info = FakeInfo("foo/__init__.py", crc=123, file_size=50)
-    record_info = FakeInfo("foo-1.0.dist-info/RECORD", crc=111, file_size=len(record_bytes))
-    upstream = FakeRemoteZip(
-        UPSTREAM_URL,
-        [info, record_info],
-        {"foo-1.0.dist-info/RECORD": record_bytes},
+    infos = {
+        "foo/__init__.py": FakeInfo("foo/__init__.py", crc=123, file_size=50),
+        "foo-1.0.dist-info/RECORD": FakeInfo(
+            "foo-1.0.dist-info/RECORD", crc=111, file_size=len(record_bytes)
+        ),
+    }
+    result = run_compare(
+        upstream_infos=infos,
+        downstream_infos=infos,
+        upstream_record=record_bytes,
+        downstream_record=record_bytes,
     )
-    downstream = FakeRemoteZip(
-        DOWNSTREAM_URL,
-        [info, record_info],
-        {"foo-1.0.dist-info/RECORD": record_bytes},
-    )
-    result = compare_wheels(upstream, downstream)
-    assert len(result.record_mismatches) > 0
-    assert any("size mismatch" in w.message for w in result.record_mismatches)
+    mismatches = result.analysis.record_mismatches
+    assert len(mismatches) > 0
+    assert any("size mismatch" in w.message for w in mismatches)
 
 
 def test_compare_wheels_no_record_mismatches() -> None:
-    """compare_wheels with consistent RECORD produces no warnings."""
+    """compare() with consistent RECORD produces no warnings."""
     record_bytes = make_record({"foo/__init__.py": 50})
-    info = FakeInfo("foo/__init__.py", crc=123, file_size=50)
-    record_info = FakeInfo("foo-1.0.dist-info/RECORD", crc=111, file_size=len(record_bytes))
-    upstream = FakeRemoteZip(
-        UPSTREAM_URL,
-        [info, record_info],
-        {"foo-1.0.dist-info/RECORD": record_bytes},
+    infos = {
+        "foo/__init__.py": FakeInfo("foo/__init__.py", crc=123, file_size=50),
+        "foo-1.0.dist-info/RECORD": FakeInfo(
+            "foo-1.0.dist-info/RECORD", crc=111, file_size=len(record_bytes)
+        ),
+    }
+    result = run_compare(
+        upstream_infos=infos,
+        downstream_infos=infos,
+        upstream_record=record_bytes,
+        downstream_record=record_bytes,
     )
-    downstream = FakeRemoteZip(
-        DOWNSTREAM_URL,
-        [info, record_info],
-        {"foo-1.0.dist-info/RECORD": record_bytes},
-    )
-    result = compare_wheels(upstream, downstream)
-    assert result.record_mismatches == ()
+    assert result.analysis.record_mismatches == []
 
 
-# --- WheelComparison.to_dict ---
+# --- Comparison.to_dict ---
 
 
 def test_to_dict() -> None:
-    result = WheelComparison(
-        upstream="up",
-        downstream="down",
-        upstream_wheel="foo-1.0-py3-none-any.whl",
-        downstream_wheel="foo-1.0-py3-none-any.whl",
-        dist="foo",
-        upstream_version=Version("1.0"),
-        downstream_version=Version("1.0"),
+    result = make_comparison(
         only_upstream=(FileEntry("gone.py", Severity.ERROR, Classification.OTHER),),
-        only_downstream=(),
         different=(
             FileDiff(
                 "foo.so", 100, 200, 111, 222, Severity.EXPECTED, Classification.EXTENSION_MODULE

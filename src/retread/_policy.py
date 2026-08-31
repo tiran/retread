@@ -13,14 +13,7 @@ import tomllib
 
 import packaging.utils
 
-from retread._compare import Severity, WheelComparison
 from retread._errors import PolicyError
-from retread._platform import NO_SHARED_LIBS_WARNING
-
-# The ``platlib`` key suppresses this specific platform warning; matched
-# by identity against the canonical message rather than a substring so a
-# reworded warning cannot silently disable the policy.
-_NO_SHARED_LIBS = NO_SHARED_LIBS_WARNING
 
 _VALID_KEYS = frozenset(
     {
@@ -32,9 +25,6 @@ _VALID_KEYS = frozenset(
         "platlib",
     }
 )
-
-# Repeated METADATA fields accepted when ``ignore_dependency_metadata`` is set.
-_DEPENDENCY_METADATA_FIELDS = frozenset({"Requires-Dist", "Provides-Extra"})
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -170,99 +160,3 @@ def lookup_policy(
     if pkg is None:
         return None
     return pkg.versions.get("*")
-
-
-def apply_policy(
-    result: WheelComparison,
-    policy: VersionPolicy,
-) -> WheelComparison:
-    """Apply a version policy to a comparison result.
-
-    Overrides severity to :attr:`Severity.IGNORED` for:
-
-    - ``only_upstream`` entries matching ``ignore_missing_downstream``
-      patterns.
-    - ``only_downstream`` entries matching ``ignore_extra_downstream``
-      patterns.
-    - ``different`` entries matching ``ignore_differences`` patterns.
-
-    When ``platlib`` is set, the "no shared libraries" platform warning
-    is removed from
-    :attr:`~retread._compare.WheelComparison.platform_warnings`.
-
-    When ``ignore_dependency_metadata`` is set, ``Requires-Dist`` and
-    ``Provides-Extra`` differences in
-    :attr:`~retread._compare.WheelComparison.metadata_field_diffs` are
-    marked :attr:`~retread._compare.MetadataFieldDiff.ignored` so they
-    are still reported but not treated as errors.
-
-    Returns the original result unchanged if no rule matched, otherwise a
-    new :class:`WheelComparison` via :func:`dataclasses.replace`.
-    """
-    changed = False
-
-    if policy.ignore_missing_downstream:
-        new_only_upstream = list(result.only_upstream)
-        for i, entry in enumerate(new_only_upstream):
-            if _matches_any_pattern(entry.filename, policy.ignore_missing_downstream):
-                new_only_upstream[i] = dataclasses.replace(entry, severity=Severity.IGNORED)
-                changed = True
-        only_upstream = tuple(new_only_upstream)
-    else:
-        only_upstream = result.only_upstream
-
-    if policy.ignore_extra_downstream:
-        new_only_downstream = list(result.only_downstream)
-        for i, entry in enumerate(new_only_downstream):
-            if _matches_any_pattern(entry.filename, policy.ignore_extra_downstream):
-                new_only_downstream[i] = dataclasses.replace(entry, severity=Severity.IGNORED)
-                changed = True
-        only_downstream = tuple(new_only_downstream)
-    else:
-        only_downstream = result.only_downstream
-
-    if policy.ignore_differences:
-        new_different = list(result.different)
-        for i, diff in enumerate(new_different):
-            if _matches_any_pattern(diff.filename, policy.ignore_differences):
-                new_different[i] = dataclasses.replace(diff, severity=Severity.IGNORED)
-                changed = True
-        different = tuple(new_different)
-    else:
-        different = result.different
-
-    # platlib: suppress the "no shared libraries" platform warning.
-    if policy.platlib and result.platform_warnings:
-        filtered = tuple(w for w in result.platform_warnings if w.message != _NO_SHARED_LIBS)
-        if len(filtered) != len(result.platform_warnings):
-            platform_warnings = filtered
-            changed = True
-        else:
-            platform_warnings = result.platform_warnings
-    else:
-        platform_warnings = result.platform_warnings
-
-    # Accept Requires-Dist / Provides-Extra differences: mark them ignored
-    # so they are still reported (and serialized) but not treated as an
-    # error, rather than dropping them silently.
-    if policy.ignore_dependency_metadata and result.metadata_field_diffs:
-        new_field_diffs = list(result.metadata_field_diffs)
-        for i, diff in enumerate(new_field_diffs):
-            if not diff.ignored and diff.field in _DEPENDENCY_METADATA_FIELDS:
-                new_field_diffs[i] = dataclasses.replace(diff, ignored=True)
-                changed = True
-        metadata_field_diffs = tuple(new_field_diffs)
-    else:
-        metadata_field_diffs = result.metadata_field_diffs
-
-    if not changed:
-        return result
-
-    return dataclasses.replace(
-        result,
-        only_upstream=only_upstream,
-        only_downstream=only_downstream,
-        different=different,
-        platform_warnings=platform_warnings,
-        metadata_field_diffs=metadata_field_diffs,
-    )

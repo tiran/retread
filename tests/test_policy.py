@@ -4,27 +4,30 @@ import pathlib
 import textwrap
 
 import pytest
-from packaging.version import Version
 
-from retread._compare import (
+from retread import (
+    Analysis,
     Classification,
+    Comparison,
+    Context,
     FileDiff,
     FileEntry,
     MetadataFieldDiff,
     Severity,
-    WheelComparison,
 )
 from retread._errors import PolicyError
-from retread._platform import NO_SHARED_LIBS_WARNING, PlatformWarning
+from retread._findings import NO_SHARED_LIBS_WARNING, PlatformWarning
 from retread._policy import (
     PackagePolicy,
     VersionPolicy,
     _matches_any_pattern,
     _validate_filename,
-    apply_policy,
     load_policy_dir,
     lookup_policy,
 )
+from retread.checker._policy import apply_policy
+
+from .conftest import make_comparison, make_wheel_info
 
 # --- _validate_filename ---
 
@@ -193,19 +196,11 @@ def _make_result(
     different: tuple[FileDiff, ...] = (),
     metadata_field_diffs: tuple[MetadataFieldDiff, ...] = (),
     platform_warnings: tuple[PlatformWarning, ...] = (),
-) -> WheelComparison:
-    return WheelComparison(
-        upstream="up",
-        downstream="down",
-        upstream_wheel="foo-1.0-py3-none-any.whl",
-        downstream_wheel="foo-1.0-py3-none-any.whl",
-        dist="foo",
-        upstream_version=Version("1.0"),
-        downstream_version=Version("1.0"),
+) -> Comparison:
+    return make_comparison(
         only_upstream=only_upstream,
         only_downstream=only_downstream,
         different=different,
-        identical=(),
         metadata_field_diffs=metadata_field_diffs,
         platform_warnings=platform_warnings,
     )
@@ -221,9 +216,9 @@ def test_apply_policy_ignore_missing_downstream() -> None:
         ignore_extra_downstream=(),
         platlib=False,
     )
-    new_result = apply_policy(result, policy)
-    assert new_result.only_upstream[0].severity is Severity.IGNORED
-    assert not new_result.has_errors
+    apply_policy(result, policy)
+    assert result.analysis.only_upstream[0].severity is Severity.IGNORED
+    assert not result.has_errors
 
 
 def test_apply_policy_ignore_differences() -> None:
@@ -238,9 +233,9 @@ def test_apply_policy_ignore_differences() -> None:
         ignore_extra_downstream=(),
         platlib=False,
     )
-    new_result = apply_policy(result, policy)
-    assert new_result.different[0].severity is Severity.IGNORED
-    assert not new_result.has_errors
+    apply_policy(result, policy)
+    assert result.analysis.different[0].severity is Severity.IGNORED
+    assert not result.has_errors
 
 
 def test_apply_policy_no_match() -> None:
@@ -253,9 +248,9 @@ def test_apply_policy_no_match() -> None:
         ignore_extra_downstream=(),
         platlib=False,
     )
-    new_result = apply_policy(result, policy)
-    assert new_result is result  # unchanged
-    assert new_result.has_errors
+    apply_policy(result, policy)
+    assert result.analysis.only_upstream[0].severity is Severity.ERROR  # unchanged
+    assert result.has_errors
 
 
 def test_apply_policy_empty() -> None:
@@ -268,8 +263,8 @@ def test_apply_policy_empty() -> None:
         ignore_extra_downstream=(),
         platlib=False,
     )
-    new_result = apply_policy(result, policy)
-    assert new_result is result
+    apply_policy(result, policy)
+    assert result.analysis.only_upstream[0].severity is Severity.ERROR
 
 
 # --- apply_policy: metadata field diffs ---
@@ -295,12 +290,13 @@ def test_apply_policy_ignore_dependency_metadata() -> None:
         MetadataFieldDiff("Provides-Extra", ("cuda",), ()),
     )
     result = _make_result(metadata_field_diffs=diffs)
-    new_result = apply_policy(result, _vp(ignore_dependency_metadata=True))
+    apply_policy(result, _vp(ignore_dependency_metadata=True))
     # Diffs are still reported (not dropped), but flagged as ignored and
     # their entries preserved.
-    assert len(new_result.metadata_field_diffs) == 2
-    assert all(d.ignored for d in new_result.metadata_field_diffs)
-    assert new_result.metadata_field_diffs[0].only_upstream == ("torch>=2.0", "numpy>=1.20")
+    field_diffs = result.analysis.metadata_field_diffs
+    assert len(field_diffs) == 2
+    assert all(d.ignored for d in field_diffs)
+    assert field_diffs[0].only_upstream == ("torch>=2.0", "numpy>=1.20")
 
 
 def test_apply_policy_ignore_dependency_metadata_leaves_other_fields() -> None:
@@ -310,8 +306,8 @@ def test_apply_policy_ignore_dependency_metadata_leaves_other_fields() -> None:
         MetadataFieldDiff("Classifier", ("Private :: Do Not Upload",), ()),
     )
     result = _make_result(metadata_field_diffs=diffs)
-    new_result = apply_policy(result, _vp(ignore_dependency_metadata=True))
-    by_field = {d.field: d for d in new_result.metadata_field_diffs}
+    apply_policy(result, _vp(ignore_dependency_metadata=True))
+    by_field = {d.field: d for d in result.analysis.metadata_field_diffs}
     assert by_field["Requires-Dist"].ignored is True
     assert by_field["Classifier"].ignored is False
 
@@ -320,16 +316,58 @@ def test_apply_policy_ignore_dependency_metadata_disabled() -> None:
     """Without the flag, dependency diffs are left untouched."""
     diff = MetadataFieldDiff("Requires-Dist", ("torch>=2.0",), ())
     result = _make_result(metadata_field_diffs=(diff,))
-    new_result = apply_policy(result, _vp(ignore_dependency_metadata=False))
-    assert new_result is result
+    apply_policy(result, _vp(ignore_dependency_metadata=False))
+    assert result.analysis.metadata_field_diffs[0].ignored is False
 
 
 def test_apply_policy_ignore_dependency_metadata_idempotent() -> None:
     """Re-applying the flag to already-ignored diffs is a no-op."""
     diff = MetadataFieldDiff("Requires-Dist", ("torch>=2.0",), (), ignored=True)
     result = _make_result(metadata_field_diffs=(diff,))
-    new_result = apply_policy(result, _vp(ignore_dependency_metadata=True))
-    assert new_result is result
+    apply_policy(result, _vp(ignore_dependency_metadata=True))
+    assert result.analysis.metadata_field_diffs[0].ignored is True
+
+
+def _metadata_comparison(up_meta: bytes, down_meta: bytes, meta_diff: FileDiff) -> Comparison:
+    """Build a Comparison whose wheels carry METADATA and one METADATA FileDiff."""
+    up = make_wheel_info("foo-1.0-py3-none-any.whl", [], source="up", metadata=up_meta)
+    down = make_wheel_info("foo-1.0-py3-none-any.whl", [], source="down", metadata=down_meta)
+    return Comparison(
+        context=Context.default(),
+        upstream=up,
+        downstream=down,
+        analysis=Analysis(different=[meta_diff]),
+    )
+
+
+def test_apply_policy_ignore_dependency_metadata_downgrades_error() -> None:
+    """A METADATA file error is downgraded to IGNORED when Name/Version match."""
+    meta_diff = FileDiff(
+        "foo-1.0.dist-info/METADATA", 10, 20, 1, 2, Severity.ERROR, Classification.DIST_INFO
+    )
+    result = _metadata_comparison(
+        b"Metadata-Version: 2.1\nName: foo\nVersion: 1.0\nRequires-Dist: a\n",
+        b"Metadata-Version: 2.1\nName: Foo\nVersion: 1.0\nRequires-Dist: b\n",
+        meta_diff,
+    )
+    apply_policy(result, _vp(ignore_dependency_metadata=True))
+    assert result.analysis.different[0].severity is Severity.IGNORED
+    assert not result.has_errors
+
+
+def test_apply_policy_ignore_dependency_metadata_keeps_version_mismatch() -> None:
+    """A METADATA file error survives when Name/Version genuinely differ."""
+    meta_diff = FileDiff(
+        "foo-1.0.dist-info/METADATA", 10, 20, 1, 2, Severity.ERROR, Classification.DIST_INFO
+    )
+    result = _metadata_comparison(
+        b"Metadata-Version: 2.1\nName: foo\nVersion: 1.0\n",
+        b"Metadata-Version: 2.1\nName: foo\nVersion: 2.0\n",
+        meta_diff,
+    )
+    apply_policy(result, _vp(ignore_dependency_metadata=True))
+    assert result.analysis.different[0].severity is Severity.ERROR
+    assert result.has_errors
 
 
 # --- apply_policy: platlib ---
@@ -340,16 +378,16 @@ def test_apply_policy_platlib_removes_no_shared_libs_warning() -> None:
     keep = PlatformWarning("upstream", "some other platform warning")
     drop = PlatformWarning("downstream", NO_SHARED_LIBS_WARNING)
     result = _make_result(platform_warnings=(keep, drop))
-    new_result = apply_policy(result, _vp(platlib=True))
-    assert new_result.platform_warnings == (keep,)
+    apply_policy(result, _vp(platlib=True))
+    assert result.analysis.platform_warnings == [keep]
 
 
 def test_apply_policy_platlib_no_matching_warning() -> None:
     """platlib leaves unrelated warnings and returns the result unchanged."""
     keep = PlatformWarning("upstream", "some other platform warning")
     result = _make_result(platform_warnings=(keep,))
-    new_result = apply_policy(result, _vp(platlib=True))
-    assert new_result is result
+    apply_policy(result, _vp(platlib=True))
+    assert result.analysis.platform_warnings == [keep]
 
 
 def test_load_policy_dir_dependency_metadata_key(tmp_path: pathlib.Path) -> None:

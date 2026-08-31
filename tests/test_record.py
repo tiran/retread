@@ -1,15 +1,13 @@
-"""Tests for retread._record."""
+"""Tests for retread.checker._record."""
 
-from packaging.version import Version
-
-from retread._compare import WheelComparison
-from retread._record import _check_record, _parse_record, check_records
+from retread import Analysis, Comparison, Context
+from retread.checker import Pool, RecordChecker
+from retread.checker._record import _check_record, _parse_record
 
 from .conftest import (
-    DOWNSTREAM_URL,
-    UPSTREAM_URL,
     FakeInfo,
     make_record,
+    make_wheel_info,
 )
 
 _RECORD_PATH = "foo-1.0.dist-info/RECORD"
@@ -114,22 +112,19 @@ def test_parse_record_regular_file_empty_hash_size_errors() -> None:
 
 def test_check_record_all_match() -> None:
     record_files = {"foo/__init__.py": 100, "foo-1.0.dist-info/RECORD": None}
-    zip_infos = {
-        "foo/__init__.py": FakeInfo("foo/__init__.py", file_size=100),
-        "foo-1.0.dist-info/RECORD": FakeInfo("foo-1.0.dist-info/RECORD", file_size=50),
-    }
-    warnings = _check_record("upstream", record_files, zip_infos, "foo-1.0.dist-info/RECORD")
+    zip_sizes = {"foo/__init__.py": 100, "foo-1.0.dist-info/RECORD": 50}
+    warnings = _check_record("upstream", record_files, zip_sizes, "foo-1.0.dist-info/RECORD")
     assert warnings == []
 
 
 def test_check_record_file_in_zip_not_record() -> None:
     record_files = {"foo/__init__.py": 100, "foo-1.0.dist-info/RECORD": None}
-    zip_infos = {
-        "foo/__init__.py": FakeInfo("foo/__init__.py", file_size=100),
-        "foo/extra.py": FakeInfo("foo/extra.py", file_size=50),
-        "foo-1.0.dist-info/RECORD": FakeInfo("foo-1.0.dist-info/RECORD", file_size=50),
+    zip_sizes = {
+        "foo/__init__.py": 100,
+        "foo/extra.py": 50,
+        "foo-1.0.dist-info/RECORD": 50,
     }
-    warnings = _check_record("upstream", record_files, zip_infos, "foo-1.0.dist-info/RECORD")
+    warnings = _check_record("upstream", record_files, zip_sizes, "foo-1.0.dist-info/RECORD")
     assert len(warnings) == 1
     assert "file in ZIP but not in RECORD" in warnings[0].message
     assert "foo/extra.py" in warnings[0].message
@@ -141,11 +136,8 @@ def test_check_record_file_in_record_not_zip() -> None:
         "foo/missing.py": 200,
         "foo-1.0.dist-info/RECORD": None,
     }
-    zip_infos = {
-        "foo/__init__.py": FakeInfo("foo/__init__.py", file_size=100),
-        "foo-1.0.dist-info/RECORD": FakeInfo("foo-1.0.dist-info/RECORD", file_size=50),
-    }
-    warnings = _check_record("upstream", record_files, zip_infos, "foo-1.0.dist-info/RECORD")
+    zip_sizes = {"foo/__init__.py": 100, "foo-1.0.dist-info/RECORD": 50}
+    warnings = _check_record("upstream", record_files, zip_sizes, "foo-1.0.dist-info/RECORD")
     assert len(warnings) == 1
     assert "file in RECORD but not in ZIP" in warnings[0].message
     assert "foo/missing.py" in warnings[0].message
@@ -153,11 +145,8 @@ def test_check_record_file_in_record_not_zip() -> None:
 
 def test_check_record_size_mismatch() -> None:
     record_files = {"foo/__init__.py": 99, "foo-1.0.dist-info/RECORD": None}
-    zip_infos = {
-        "foo/__init__.py": FakeInfo("foo/__init__.py", file_size=100),
-        "foo-1.0.dist-info/RECORD": FakeInfo("foo-1.0.dist-info/RECORD", file_size=50),
-    }
-    warnings = _check_record("upstream", record_files, zip_infos, "foo-1.0.dist-info/RECORD")
+    zip_sizes = {"foo/__init__.py": 100, "foo-1.0.dist-info/RECORD": 50}
+    warnings = _check_record("upstream", record_files, zip_sizes, "foo-1.0.dist-info/RECORD")
     assert len(warnings) == 1
     assert "size mismatch" in warnings[0].message
     assert "RECORD says 99" in warnings[0].message
@@ -167,170 +156,74 @@ def test_check_record_size_mismatch() -> None:
 def test_check_record_record_itself_excluded() -> None:
     """RECORD file should not be flagged as missing from RECORD."""
     record_files = {"foo/__init__.py": 100}
-    zip_infos = {
-        "foo/__init__.py": FakeInfo("foo/__init__.py", file_size=100),
-        "foo-1.0.dist-info/RECORD": FakeInfo("foo-1.0.dist-info/RECORD", file_size=50),
-    }
-    warnings = _check_record("upstream", record_files, zip_infos, "foo-1.0.dist-info/RECORD")
+    zip_sizes = {"foo/__init__.py": 100, "foo-1.0.dist-info/RECORD": 50}
+    warnings = _check_record("upstream", record_files, zip_sizes, "foo-1.0.dist-info/RECORD")
     assert warnings == []
 
 
 def test_check_record_none_size_skipped() -> None:
     """When RECORD has None size, size comparison should be skipped."""
     record_files = {"foo/__init__.py": None, "foo-1.0.dist-info/RECORD": None}
-    zip_infos = {
-        "foo/__init__.py": FakeInfo("foo/__init__.py", file_size=100),
-        "foo-1.0.dist-info/RECORD": FakeInfo("foo-1.0.dist-info/RECORD", file_size=50),
-    }
-    warnings = _check_record("upstream", record_files, zip_infos, "foo-1.0.dist-info/RECORD")
+    zip_sizes = {"foo/__init__.py": 100, "foo-1.0.dist-info/RECORD": 50}
+    warnings = _check_record("upstream", record_files, zip_sizes, "foo-1.0.dist-info/RECORD")
     assert warnings == []
 
 
-# --- check_records ---
+# --- RecordChecker ---
+
+
+def _run_record_checker(names, record, *, size=100):
+    """Run RecordChecker on two identical wheels and return record_mismatches.
+
+    *names* are the file paths (with size *size*); *record* is the RECORD blob
+    (``None`` for a wheel with no RECORD).  The same inputs are used for both
+    sides, so a per-side finding appears twice.
+    """
+    infos = [FakeInfo(n, file_size=size) for n in names]
+    up = make_wheel_info("foo-1.0-py3-none-any.whl", infos, source="up", record=record)
+    down = make_wheel_info("foo-1.0-py3-none-any.whl", infos, source="down", record=record)
+    comparison = Comparison(
+        context=Context.default(), upstream=up, downstream=down, analysis=Analysis()
+    )
+    RecordChecker().check(comparison, Pool())
+    return comparison.analysis.record_mismatches
 
 
 def test_check_records_consistent_no_warnings() -> None:
     """Consistent RECORD produces no warnings."""
     record_bytes = make_record({"foo/__init__.py": 100})
-    infos = {
-        "foo/__init__.py": FakeInfo("foo/__init__.py", file_size=100),
-        "foo-1.0.dist-info/RECORD": FakeInfo("foo-1.0.dist-info/RECORD", file_size=50),
-    }
-    result = WheelComparison(
-        upstream=UPSTREAM_URL,
-        downstream=DOWNSTREAM_URL,
-        upstream_wheel="foo-1.0-py3-none-any.whl",
-        downstream_wheel="foo-1.0-py3-none-any.whl",
-        dist="foo",
-        upstream_version=Version("1.0"),
-        downstream_version=Version("1.0"),
-        only_upstream=(),
-        only_downstream=(),
-        different=(),
-        identical=("foo/__init__.py",),
-    )
-    checked = check_records(
-        result,
-        upstream_infos=infos,
-        downstream_infos=infos,
-        upstream_record=record_bytes,
-        downstream_record=record_bytes,
-    )
-    assert checked.record_mismatches == ()
+    names = ["foo/__init__.py", "foo-1.0.dist-info/RECORD"]
+    assert _run_record_checker(names, record_bytes) == []
 
 
 def test_check_records_missing_record_errors() -> None:
     """Missing RECORD produces an error."""
-    infos = {"foo/__init__.py": FakeInfo("foo/__init__.py", file_size=100)}
-    result = WheelComparison(
-        upstream=UPSTREAM_URL,
-        downstream=DOWNSTREAM_URL,
-        upstream_wheel="foo-1.0-py3-none-any.whl",
-        downstream_wheel="foo-1.0-py3-none-any.whl",
-        dist="foo",
-        upstream_version=Version("1.0"),
-        downstream_version=Version("1.0"),
-        only_upstream=(),
-        only_downstream=(),
-        different=(),
-        identical=("foo/__init__.py",),
-    )
-    checked = check_records(
-        result,
-        upstream_infos=infos,
-        downstream_infos=infos,
-    )
-    assert len(checked.record_mismatches) == 2
-    assert all("missing RECORD" in m.message for m in checked.record_mismatches)
+    mismatches = _run_record_checker(["foo/__init__.py"], None)
+    assert len(mismatches) == 2
+    assert all("missing RECORD" in m.message for m in mismatches)
 
 
 def test_check_records_malformed_record_errors() -> None:
     """Malformed RECORD (not valid UTF-8) produces an error."""
-    infos = {
-        "foo/__init__.py": FakeInfo("foo/__init__.py", file_size=100),
-        "foo-1.0.dist-info/RECORD": FakeInfo("foo-1.0.dist-info/RECORD", file_size=50),
-    }
-    result = WheelComparison(
-        upstream=UPSTREAM_URL,
-        downstream=DOWNSTREAM_URL,
-        upstream_wheel="foo-1.0-py3-none-any.whl",
-        downstream_wheel="foo-1.0-py3-none-any.whl",
-        dist="foo",
-        upstream_version=Version("1.0"),
-        downstream_version=Version("1.0"),
-        only_upstream=(),
-        only_downstream=(),
-        different=(),
-        identical=("foo/__init__.py",),
-    )
-    checked = check_records(
-        result,
-        upstream_infos=infos,
-        downstream_infos=infos,
-        upstream_record=b"\xff\xfe",
-        downstream_record=b"\xff\xfe",
-    )
-    assert len(checked.record_mismatches) == 2
-    assert all("malformed RECORD" in m.message for m in checked.record_mismatches)
+    names = ["foo/__init__.py", "foo-1.0.dist-info/RECORD"]
+    mismatches = _run_record_checker(names, b"\xff\xfe")
+    assert len(mismatches) == 2
+    assert all("malformed RECORD" in m.message for m in mismatches)
 
 
 def test_check_records_empty_record_errors() -> None:
     """Empty RECORD (no valid entries) produces an error."""
-    infos = {
-        "foo/__init__.py": FakeInfo("foo/__init__.py", file_size=100),
-        "foo-1.0.dist-info/RECORD": FakeInfo("foo-1.0.dist-info/RECORD", file_size=50),
-    }
-    result = WheelComparison(
-        upstream=UPSTREAM_URL,
-        downstream=DOWNSTREAM_URL,
-        upstream_wheel="foo-1.0-py3-none-any.whl",
-        downstream_wheel="foo-1.0-py3-none-any.whl",
-        dist="foo",
-        upstream_version=Version("1.0"),
-        downstream_version=Version("1.0"),
-        only_upstream=(),
-        only_downstream=(),
-        different=(),
-        identical=("foo/__init__.py",),
-    )
-    checked = check_records(
-        result,
-        upstream_infos=infos,
-        downstream_infos=infos,
-        upstream_record=b"",
-        downstream_record=b"",
-    )
-    assert len(checked.record_mismatches) == 2
-    assert all("empty RECORD" in m.message for m in checked.record_mismatches)
+    names = ["foo/__init__.py", "foo-1.0.dist-info/RECORD"]
+    mismatches = _run_record_checker(names, b"")
+    assert len(mismatches) == 2
+    assert all("empty RECORD" in m.message for m in mismatches)
 
 
 def test_check_records_mismatch_warns() -> None:
     """Mismatched RECORD produces warnings."""
     # RECORD says size 99 but ZIP says 100
     record_bytes = make_record({"foo/__init__.py": 99})
-    infos = {
-        "foo/__init__.py": FakeInfo("foo/__init__.py", file_size=100),
-        "foo-1.0.dist-info/RECORD": FakeInfo("foo-1.0.dist-info/RECORD", file_size=50),
-    }
-    result = WheelComparison(
-        upstream=UPSTREAM_URL,
-        downstream=DOWNSTREAM_URL,
-        upstream_wheel="foo-1.0-py3-none-any.whl",
-        downstream_wheel="foo-1.0-py3-none-any.whl",
-        dist="foo",
-        upstream_version=Version("1.0"),
-        downstream_version=Version("1.0"),
-        only_upstream=(),
-        only_downstream=(),
-        different=(),
-        identical=("foo/__init__.py",),
-    )
-    checked = check_records(
-        result,
-        upstream_infos=infos,
-        downstream_infos=infos,
-        upstream_record=record_bytes,
-        downstream_record=record_bytes,
-    )
-    assert len(checked.record_mismatches) > 0
-    assert any("size mismatch" in w.message for w in checked.record_mismatches)
+    names = ["foo/__init__.py", "foo-1.0.dist-info/RECORD"]
+    mismatches = _run_record_checker(names, record_bytes)
+    assert len(mismatches) > 0
+    assert any("size mismatch" in w.message for w in mismatches)
