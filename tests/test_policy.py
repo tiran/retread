@@ -414,6 +414,30 @@ def test_policy_dependency_metadata_must_be_bool(tmp_path: pathlib.Path) -> None
         load_policy_dir(tmp_path)
 
 
+def test_load_policy_dir_allow_cross_platform_key(tmp_path: pathlib.Path) -> None:
+    (tmp_path / "foo.toml").write_text(
+        textwrap.dedent("""\
+        ["*"]
+        description = "test"
+        allow_cross_platform = true
+    """)
+    )
+    vp = load_policy_dir(tmp_path)["foo"].versions["*"]
+    assert vp.allow_cross_platform is True
+
+
+def test_policy_allow_cross_platform_must_be_bool(tmp_path: pathlib.Path) -> None:
+    (tmp_path / "foo.toml").write_text(
+        textwrap.dedent("""\
+        ["*"]
+        description = "test"
+        allow_cross_platform = "yes"
+    """)
+    )
+    with pytest.raises(PolicyError, match="allow_cross_platform"):
+        load_policy_dir(tmp_path)
+
+
 # --- example policies ---
 
 

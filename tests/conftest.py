@@ -107,6 +107,7 @@ def make_comparison(
     platform_warnings=(),
     venv_bundles=(),
     metadata_field_diffs=(),
+    resolution_mismatches=(),
     context: Context | None = None,
     **_ignored,
 ) -> Comparison:
@@ -125,6 +126,7 @@ def make_comparison(
         platform_warnings=list(platform_warnings),
         venv_bundles=list(venv_bundles),
         metadata_field_diffs=list(metadata_field_diffs),
+        resolution_mismatches=list(resolution_mismatches),
     )
     return Comparison(
         context=context if context is not None else Context.default(),

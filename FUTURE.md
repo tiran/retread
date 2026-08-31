@@ -15,14 +15,6 @@
   severity from NOTICE to EXPECTED since a dynamic version makes
   version file differences a guaranteed consequence of rebuilding.
 
-## Better upstream resolution errors
-
-- Distinguish between: package does not exist on the upstream index,
-  version does not exist (package found but not that version), and
-  no matching wheel (version exists but no compatible wheel for the
-  platform/ABI tags). Currently all three cases raise the same
-  `WheelNotFoundError`.
-
 ## Per-package policy extensions
 
 - Add ``**`` recursive glob support to policy patterns using

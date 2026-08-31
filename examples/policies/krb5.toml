@@ -1,0 +1,14 @@
+# Upstream krb5 publishes only macOS wheels (built against Heimdal) for this
+# release; the downstream Linux rebuild links MIT Kerberos instead.  With no
+# tag-matching upstream wheel, retread validates cross-platform.  The two builds
+# expose different backend extension modules (*_heimdal vs *_mit), so the
+# per-module presence differences under krb5/ are expected rather than bugs.
+["*"]
+description = "Upstream ships only macOS/Heimdal wheels; Linux rebuild links MIT Kerberos"
+allow_cross_platform = true
+ignore_missing_downstream = [
+    "krb5/*.so",
+]
+ignore_extra_downstream = [
+    "krb5/*.so",
+]

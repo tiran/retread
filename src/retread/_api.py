@@ -13,12 +13,18 @@ import typing
 import pypi_simple
 
 from retread._context import Context
-from retread._errors import ComparisonError, RetreadError
+from retread._errors import ComparisonError, ProjectNotFoundError, RetreadError
+from retread._findings import ResolutionMismatch
+from retread._policy import lookup_policy
 from retread._resolve import (
+    Resolution,
+    ResolutionStatus,
     _is_url,
     _wheel_basename,
+    _wheel_tag_string,
     find_matching_wheel,
     parse_wheel_spec,
+    resolve_upstream,
 )
 from retread._types import Filename, Url
 from retread._wheel import WheelInfo, WheelSource
@@ -27,9 +33,12 @@ from retread.checker import compare
 if typing.TYPE_CHECKING:
     import pathlib
 
+    import pypi_simple as pypi_simple_types
+
     from retread._backend import AsyncBackend, SyncBackend
     from retread._findings import Comparison
     from retread._policy import PackagePolicy
+    from retread._resolve import WheelSpec
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +50,7 @@ class _Resolved:
     source: str  # URL or local path to open
     is_local: bool
     origin: WheelSource
+    resolution: Resolution | None = None  # upstream only; set when index-resolved
 
 
 PYPI_SIMPLE_ENDPOINT = pypi_simple.PYPI_SIMPLE_ENDPOINT
@@ -62,6 +72,80 @@ def _async_reader(backend: AsyncBackend, source: str, is_local: bool) -> typing.
 
         return AsyncFileReader(source)
     return backend.wheel_reader(source)
+
+
+def _resolve_project_not_found(exc: Exception, spec: WheelSpec, index: str) -> Exception:
+    """Map a pypi_simple ``NoSuchProjectError`` to a retread error.
+
+    Returns the original exception unchanged if it is not a missing-project
+    error, so the caller's generic handling still applies.
+    """
+    if isinstance(exc, pypi_simple.NoSuchProjectError):
+        return ProjectNotFoundError(spec.filename, index, str(spec.name))
+    return exc
+
+
+def _upstream_resolved(
+    upstream_page: pypi_simple_types.ProjectPage, spec: WheelSpec, upstream_index: str
+) -> _Resolved:
+    """Resolve the upstream wheel from its project page, keeping the outcome."""
+    resolution = resolve_upstream(upstream_page, spec, index=upstream_index)
+    return _Resolved(
+        source=resolution.package.url,
+        is_local=False,
+        origin=WheelSource.from_package(resolution.package, upstream_page),
+        resolution=resolution,
+    )
+
+
+def _resolution_mismatch(
+    resolution: Resolution | None, downstream_filename: str
+) -> ResolutionMismatch | None:
+    """Build a :class:`ResolutionMismatch` for a fallback resolution, else ``None``."""
+    if resolution is None or resolution.status is not ResolutionStatus.FALLBACK:
+        return None
+    downstream_tags = (_wheel_tag_string(downstream_filename),)
+    listed = ", ".join(resolution.available_tags) or "none"
+    message = (
+        f"no upstream wheel matches the downstream tags "
+        f"({downstream_tags[0]}); compared against {resolution.package.filename}. "
+        f"Available upstream wheel tags for {resolution.spec.version}: {listed}"
+    )
+    return ResolutionMismatch(
+        message=message,
+        downstream_tags=downstream_tags,
+        upstream_tags=resolution.available_tags,
+    )
+
+
+def _apply_resolution_mismatch(result: Comparison, resolution: Resolution | None) -> None:
+    """Append a fallback :class:`ResolutionMismatch` to *result*'s analysis, if any.
+
+    When the package's policy sets ``allow_cross_platform``, the mismatch is
+    marked ignored so the cross-platform comparison (e.g. a downstream Linux
+    wheel validated against an upstream Windows or macOS wheel) is reported but
+    not treated as an error.
+    """
+    mismatch = _resolution_mismatch(resolution, result.downstream.filename)
+    if mismatch is None:
+        return
+    policy_map = result.context.policy
+    if policy_map:
+        version_policy = lookup_policy(
+            policy_map, result.upstream.canonical, str(result.upstream.version)
+        )
+        if version_policy is not None and version_policy.allow_cross_platform:
+            mismatch.ignored = True
+    result.analysis.resolution_mismatches.append(mismatch)
+
+
+def _log_fallback(resolution: Resolution | None) -> None:
+    """Warn (for the diff path, which has no report) when a fallback wheel is used."""
+    if resolution is not None and resolution.status is ResolutionStatus.FALLBACK:
+        logger.warning(
+            "No upstream wheel matches the downstream tags; diffing against fallback %s",
+            resolution.package.filename,
+        )
 
 
 def _local_downstream(downstream_str: str) -> _Resolved:
@@ -94,19 +178,20 @@ def _resolve_wheels(
 
     # Resolve upstream wheel
     pypi = backend.pypi_client(endpoint=upstream_index)
-    upstream_page = pypi.get_project_page(str(spec.name))
-    upstream_pkg = find_matching_wheel(upstream_page, spec, index=upstream_index)
-    upstream = _Resolved(
-        source=upstream_pkg.url,
-        is_local=False,
-        origin=WheelSource.from_package(upstream_pkg, upstream_page),
-    )
+    try:
+        upstream_page = pypi.get_project_page(str(spec.name))
+    except Exception as exc:
+        raise _resolve_project_not_found(exc, spec, upstream_index) from exc
+    upstream = _upstream_resolved(upstream_page, spec, upstream_index)
     logger.info("Upstream wheel: %s", upstream.source)
 
     # Determine downstream source type
     if downstream_index is not None:
         ds_pypi = backend.pypi_client(endpoint=downstream_index)
-        ds_page = ds_pypi.get_project_page(str(spec.name))
+        try:
+            ds_page = ds_pypi.get_project_page(str(spec.name))
+        except Exception as exc:
+            raise _resolve_project_not_found(exc, spec, downstream_index) from exc
         ds_pkg = find_matching_wheel(ds_page, spec, index=downstream_index)
         downstream_resolved = _Resolved(
             source=ds_pkg.url,
@@ -133,20 +218,24 @@ async def _async_resolve_wheels(
     logger.info("Parsed wheel spec: %s", spec)
 
     pypi = backend.pypi_client(endpoint=upstream_index)
-    if downstream_index is not None:
-        ds_pypi = backend.pypi_client(endpoint=downstream_index)
-        upstream_page, ds_page = await asyncio.gather(
-            pypi.get_project_page(str(spec.name)),
-            ds_pypi.get_project_page(str(spec.name)),
-        )
-    else:
-        upstream_page = await pypi.get_project_page(str(spec.name))
-    upstream_pkg = find_matching_wheel(upstream_page, spec, index=upstream_index)
-    upstream = _Resolved(
-        source=upstream_pkg.url,
-        is_local=False,
-        origin=WheelSource.from_package(upstream_pkg, upstream_page),
-    )
+    try:
+        if downstream_index is not None:
+            ds_pypi = backend.pypi_client(endpoint=downstream_index)
+            upstream_page, ds_page = await asyncio.gather(
+                pypi.get_project_page(str(spec.name)),
+                ds_pypi.get_project_page(str(spec.name)),
+            )
+        else:
+            upstream_page = await pypi.get_project_page(str(spec.name))
+    except Exception as exc:
+        # Both pages are for the same project name; map a missing project to a
+        # retread error against whichever index reported it.
+        if isinstance(exc, pypi_simple.NoSuchProjectError):
+            from_downstream = exc.url.startswith(str(downstream_index))
+            index = downstream_index if from_downstream else upstream_index
+            raise ProjectNotFoundError(spec.filename, index, str(spec.name)) from exc
+        raise
+    upstream = _upstream_resolved(upstream_page, spec, upstream_index)
     logger.info("Upstream wheel: %s", upstream.source)
 
     if downstream_index is not None:
@@ -219,7 +308,9 @@ def sync_retread(
             upstream_info = WheelInfo.from_sync_remote(upstream_zip, origin=up.origin)
             downstream_info = WheelInfo.from_sync_remote(downstream_zip, origin=down.origin)
         context = Context.default(policy=policy)
-        return compare(context, upstream_info, downstream_info)
+        result = compare(context, upstream_info, downstream_info)
+        _apply_resolution_mismatch(result, up.resolution)
+        return result
     except RetreadError:
         raise
     except Exception as exc:
@@ -275,7 +366,9 @@ async def async_retread(
             upstream_info = await WheelInfo.from_async_remote(upstream_zip, origin=up.origin)
             downstream_info = await WheelInfo.from_async_remote(downstream_zip, origin=down.origin)
         context = Context.default(policy=policy)
-        return compare(context, upstream_info, downstream_info)
+        result = compare(context, upstream_info, downstream_info)
+        _apply_resolution_mismatch(result, up.resolution)
+        return result
     except RetreadError:
         raise
     except Exception as exc:
@@ -322,6 +415,7 @@ def sync_diff(
             downstream_index=downstream_index,
             upstream_index=upstream_index,
         )
+        _log_fallback(up.resolution)
 
         with (
             SyncRemoteZip(backend.wheel_reader(up.source)) as upstream_zip,
@@ -368,6 +462,7 @@ async def async_diff(
             downstream_index=downstream_index,
             upstream_index=upstream_index,
         )
+        _log_fallback(up.resolution)
 
         async with (
             AsyncRemoteZip(backend.wheel_reader(up.source)) as upstream_zip,

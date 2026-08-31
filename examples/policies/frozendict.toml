@@ -1,0 +1,14 @@
+# frozendict is a special case: upstream stopped building the C extension on
+# Python 3.11 and newer, shipping a pure-Python wheel for those versions.  The
+# downstream cp312 rebuild is therefore correctly pure-Python, but upstream
+# publishes no cp312 wheel, so retread falls back to the last extension build
+# (cp310) for a file-level comparison.  That fallback pulls in the upstream-only
+# cp310 extension module, and the platform-tagged but pure-Python downstream
+# wheel trips the "no native code" check -- both are expected here, not bugs.
+["*"]
+description = "Upstream drops the C extension on Python 3.11+; downstream cp312 rebuild is pure-Python"
+allow_cross_platform = true
+platlib = true
+ignore_missing_downstream = [
+    "frozendict/_frozendict.*",
+]

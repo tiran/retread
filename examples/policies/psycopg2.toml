@@ -1,0 +1,11 @@
+# Upstream psycopg2 publishes only Windows binary wheels on PyPI; Linux users
+# build from the sdist.  A downstream Linux rebuild has no tag-matching upstream
+# wheel, so retread validates it against the upstream Windows wheel.  The native
+# extension (_psycopg) pairs across platforms (.pyd <-> .so); the Windows DLLs
+# vendored by delvewheel are recognized as vendored shared libraries.
+#
+# Genuine source differences (differing .py files) are intentionally NOT
+# ignored here -- they still surface for review.
+["*"]
+description = "Upstream ships only Windows wheels; validate the Linux rebuild cross-platform"
+allow_cross_platform = true

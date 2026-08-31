@@ -1,0 +1,8 @@
+# Upstream mysqlclient publishes only Windows binary wheels on PyPI; Linux
+# users build from the sdist.  A downstream Linux rebuild therefore has no
+# tag-matching upstream wheel, so retread validates it against the upstream
+# Windows wheel.  The native extension (_mysql) pairs across platforms
+# (.pyd <-> .so).
+["*"]
+description = "Upstream ships only Windows wheels; validate the Linux rebuild cross-platform"
+allow_cross_platform = true
