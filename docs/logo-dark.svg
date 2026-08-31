@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="retread logo">
+  <title>retread</title>
+  <desc>A full cheese wheel with Swiss holes nested inside a tire with fresh tread.</desc>
+
+  <defs>
+    <radialGradient id="rt-cheese" cx="40%" cy="36%" r="72%">
+      <stop offset="0" stop-color="#ffe79a"/>
+      <stop offset="0.6" stop-color="#f6cd55"/>
+      <stop offset="1" stop-color="#e7b52f"/>
+    </radialGradient>
+    <linearGradient id="rt-rind" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e2a52a"/>
+      <stop offset="1" stop-color="#c5851a"/>
+    </linearGradient>
+    <radialGradient id="rt-hole" cx="36%" cy="30%" r="80%">
+      <stop offset="0" stop-color="#8f6413"/>
+      <stop offset="0.6" stop-color="#b98518"/>
+      <stop offset="1" stop-color="#d9a83f"/>
+    </radialGradient>
+    <clipPath id="rt-body"><circle cx="128" cy="128" r="79"/></clipPath>
+  </defs>
+
+  <g transform="translate(128 128)">
+    <!-- Shallow tread blocks around the outer edge -->
+    <g fill="#3a3a42">
+      <g id="rt-block"><path d="M-7 -124 L7 -124 L6 -112 L-6 -112 Z"/></g>
+      <use href="#rt-block" transform="rotate(10)"/>
+      <use href="#rt-block" transform="rotate(20)"/>
+      <use href="#rt-block" transform="rotate(30)"/>
+      <use href="#rt-block" transform="rotate(40)"/>
+      <use href="#rt-block" transform="rotate(50)"/>
+      <use href="#rt-block" transform="rotate(60)"/>
+      <use href="#rt-block" transform="rotate(70)"/>
+      <use href="#rt-block" transform="rotate(80)"/>
+      <use href="#rt-block" transform="rotate(90)"/>
+      <use href="#rt-block" transform="rotate(100)"/>
+      <use href="#rt-block" transform="rotate(110)"/>
+      <use href="#rt-block" transform="rotate(120)"/>
+      <use href="#rt-block" transform="rotate(130)"/>
+      <use href="#rt-block" transform="rotate(140)"/>
+      <use href="#rt-block" transform="rotate(150)"/>
+      <use href="#rt-block" transform="rotate(160)"/>
+      <use href="#rt-block" transform="rotate(170)"/>
+      <use href="#rt-block" transform="rotate(180)"/>
+      <use href="#rt-block" transform="rotate(190)"/>
+      <use href="#rt-block" transform="rotate(200)"/>
+      <use href="#rt-block" transform="rotate(210)"/>
+      <use href="#rt-block" transform="rotate(220)"/>
+      <use href="#rt-block" transform="rotate(230)"/>
+      <use href="#rt-block" transform="rotate(240)"/>
+      <use href="#rt-block" transform="rotate(250)"/>
+      <use href="#rt-block" transform="rotate(260)"/>
+      <use href="#rt-block" transform="rotate(270)"/>
+      <use href="#rt-block" transform="rotate(280)"/>
+      <use href="#rt-block" transform="rotate(290)"/>
+      <use href="#rt-block" transform="rotate(300)"/>
+      <use href="#rt-block" transform="rotate(310)"/>
+      <use href="#rt-block" transform="rotate(320)"/>
+      <use href="#rt-block" transform="rotate(330)"/>
+      <use href="#rt-block" transform="rotate(340)"/>
+      <use href="#rt-block" transform="rotate(350)"/>
+    </g>
+
+    <!-- Tire body (lightened for dark backgrounds) -->
+    <circle cx="0" cy="0" r="113" fill="#3a3a42"/>
+    <!-- Light outer rim so the silhouette holds on any background -->
+    <circle cx="0" cy="0" r="124" fill="none" stroke="#6b6b76" stroke-width="1.5"/>
+    <!-- Sidewall grooves -->
+    <circle cx="0" cy="0" r="104" fill="none" stroke="#565660" stroke-width="3"/>
+    <circle cx="0" cy="0" r="94"  fill="none" stroke="#565660" stroke-width="3"/>
+  </g>
+
+  <!-- Cheese wheel nested in the tire's hole -->
+  <circle cx="128" cy="128" r="86" fill="url(#rt-rind)"/>
+  <circle cx="128" cy="128" r="79" fill="url(#rt-cheese)"/>
+  <!-- inner rind line -->
+  <circle cx="128" cy="128" r="79" fill="none" stroke="#e7b52f" stroke-width="2" opacity="0.7"/>
+
+  <g clip-path="url(#rt-body)">
+    <!-- waxy sheen -->
+    <ellipse cx="104" cy="98" rx="52" ry="38" fill="#ffffff" opacity="0.13"/>
+
+    <!-- Swiss holes with depth -->
+    <g stroke="#8a5f12" stroke-width="1.1">
+      <circle cx="100" cy="104" r="14" fill="url(#rt-hole)"/>
+      <circle cx="156" cy="122" r="10" fill="url(#rt-hole)"/>
+      <circle cx="120" cy="156" r="12" fill="url(#rt-hole)"/>
+      <circle cx="86"  cy="142" r="7"  fill="url(#rt-hole)"/>
+      <circle cx="150" cy="86"  r="6"  fill="url(#rt-hole)"/>
+      <circle cx="198" cy="150" r="10" fill="url(#rt-hole)"/>
+      <circle cx="96"  cy="196" r="9"  fill="url(#rt-hole)"/>
+    </g>
+
+    <!-- lit lower rim of the larger holes -->
+    <g fill="#f4c948" opacity="0.5">
+      <ellipse cx="104" cy="113" rx="7"   ry="3.4"/>
+      <ellipse cx="159" cy="129" rx="5"   ry="2.6"/>
+      <ellipse cx="123" cy="164" rx="6"   ry="3"/>
+    </g>
+  </g>
+</svg>
