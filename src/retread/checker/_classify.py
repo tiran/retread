@@ -277,11 +277,70 @@ class ExtensionPairingChecker:
             del pool.only_downstream[path]
 
 
+class LicenseRelocationChecker:
+    """Pair unchanged license files moved into or out of PEP 639 locations.
+
+    Use the same size/CRC identity as the comparison engine, require the same
+    basename, and claim each destination only once. Unmatched files remain
+    available for normal missing-file classification.
+    """
+
+    name = "license-relocation"
+    priority = 35
+    LICENSE_NAME_RE = re.compile(r"(?:LICENSE|LICENCE|COPYING|NOTICE)(?:[._-].+)?", re.I)
+
+    def check(self, comparison: Comparison, pool: Pool) -> None:
+        up_prefix = f"{comparison.upstream.dist_info}/licenses/"
+        down_prefix = f"{comparison.downstream.dist_info}/licenses/"
+        destinations: dict[tuple[str, int, int], list[PurePosixPath]] = {}
+        for path, stat in sorted(pool.only_downstream.items()):
+            if str(path).startswith(down_prefix) or self.LICENSE_NAME_RE.fullmatch(path.name):
+                destinations.setdefault((path.name, stat.size, stat.crc), []).append(path)
+
+        # Legacy sources can only match modern destinations. Pair them first
+        # so a modern source does not consume their only available match.
+        sources = sorted(
+            pool.only_upstream.items(),
+            key=lambda item: (str(item[0]).startswith(up_prefix), item[0]),
+        )
+        for path, stat in sources:
+            is_modern = str(path).startswith(up_prefix)
+            if not is_modern and not self.LICENSE_NAME_RE.fullmatch(path.name):
+                continue
+            candidates = destinations.get((path.name, stat.size, stat.crc), [])
+            destination = next(
+                (
+                    candidate
+                    for candidate in candidates
+                    if is_modern or str(candidate).startswith(down_prefix)
+                ),
+                None,
+            )
+            if destination is None:
+                continue
+            candidates.remove(destination)
+            comparison.analysis.only_upstream.append(
+                FileEntry(str(path), Severity.NOTICE, Classification.LICENSE)
+            )
+            comparison.analysis.only_downstream.append(
+                FileEntry(str(destination), Severity.NOTICE, Classification.LICENSE)
+            )
+            del pool.only_upstream[path]
+            del pool.only_downstream[destination]
+
+
 class DistInfoChecker(ClassifierChecker):
     """Classify files under the ``{name}-{version}.dist-info/`` directory."""
 
     name = "dist-info"
     priority = 40
+
+    def check(self, comparison: Comparison, pool: Pool) -> None:
+        first = len(comparison.analysis.only_upstream)
+        super().check(comparison, pool)
+        for entry in comparison.analysis.only_upstream[first:]:
+            if entry.classification is Classification.LICENSE:
+                entry.severity = Severity.ERROR
 
     def classify(
         self, filename: str, dist: str, version: str, *, missing: bool
@@ -298,7 +357,9 @@ class DistInfoChecker(ClassifierChecker):
             return Severity.NOTICE, Classification.METADATA
         if rest.startswith("sboms/"):
             return Severity.NOTICE, Classification.SBOM
-        if rest.startswith("licenses/"):
+        if rest.startswith("licenses/") or LicenseRelocationChecker.LICENSE_NAME_RE.fullmatch(
+            rest
+        ):
             return Severity.NOTICE, Classification.LICENSE
         return Severity.NOTICE, Classification.DIST_INFO
 
