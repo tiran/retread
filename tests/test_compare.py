@@ -505,6 +505,17 @@ def test_compare_resolves_dist_info_case_mismatch() -> None:
             ("foo", "1.0", [], ["code-syntax-highlighting"]),
             True,
         ),
+        # requested dependency extras follow the same PEP 685 equivalence
+        (
+            ("foo", "1.0", ["bar[code_syntax_highlighting]>=1.0"]),
+            ("foo", "1.0", ["bar[code-syntax-highlighting]>=1.0"]),
+            True,
+        ),
+        (
+            ("foo", "1.0", ["bar[PDF]>=1.0"]),
+            ("foo", "1.0", ["bar[pdf]>=1.0"]),
+            True,
+        ),
         # compatible-release specifier (~=22.0) must not be stripped to ~=22
         (
             ("foo", "1.0", ["bar~=22.0"]),
@@ -535,6 +546,8 @@ def test_compare_resolves_dist_info_case_mismatch() -> None:
         "local-version-different-base",
         "normalized-version-spec",
         "normalized-extra-name",
+        "normalized-requested-extra-name",
+        "normalized-requested-extra-case",
         "compatible-release-spec",
         "arbitrary-equality-spec",
     ],

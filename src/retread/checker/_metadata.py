@@ -52,6 +52,8 @@ def _normalize_req(raw: str) -> str:
     Uses ``Requirement`` to normalize whitespace, quoting, and marker
     formatting, then canonicalizes the distribution name so that
     ``typing-extensions`` and ``typing_extensions`` compare equal.
+    Requested extra names are canonicalized per PEP 685 so that
+    ``bar[doc_tools]`` and ``bar[doc-tools]`` also compare equal.
     Version specifiers are normalized so that PEP 440 equivalent
     spellings like ``<5`` and ``<5.0`` compare equal.  Trailing-zero
     stripping is skipped for the ``~=`` and ``===`` operators, where it
@@ -60,6 +62,7 @@ def _normalize_req(raw: str) -> str:
     """
     req = Requirement(raw)
     req.name = packaging.utils.canonicalize_name(req.name)
+    req.extras = {packaging.utils.canonicalize_name(extra) for extra in req.extras}
     req.specifier = SpecifierSet(
         ",".join(
             f"{s.operator}{_normalize_version_spec(s.version, s.operator)}" for s in req.specifier
